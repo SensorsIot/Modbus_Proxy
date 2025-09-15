@@ -1,46 +1,97 @@
 //
-// File: modbus_proxy.cpp
-// Requirement: MODBUS RTU Proxy for ESP32 using the custom ModbusRTU485 library.
+// ESP32 MODBUS RTU Intelligent Proxy with Power Correction
+// ========================================================
 //
-// ## Project Overview
-// This program acts as an intelligent proxy between SUN2000 inverter and DTSU-666 energy meter.
-// It provides real-time power correction by comparing measurements from two independent meters:
-// - DTSU-666 (via MODBUS RTU) - directly connected to SUN2000
-// - Landis & Gyr (via MQTT) - reference meter with complete grid visibility
+// ## Purpose
+// Intelligent proxy between SUN2000 solar inverter and DTSU-666 energy meter that provides
+// real-time power measurement correction by comparing two independent meters to ensure
+// optimal solar generation control.
 //
-// ## Core Functionality
-// 1. **Bidirectional MODBUS Proxy**: Forwards requests/replies between SUN2000 ↔ DTSU-666
-// 2. **Power Measurement Correction**: Compensates for loads between meters
-// 3. **MQTT Integration**: Receives reference power data from Landis & Gyr meter
-// 4. **Comprehensive Debugging**: Detailed logging of all proxy operations
+// ## System Architecture
+//
+// ### Hardware Components
+// - **ESP32**: Dual-core microcontroller with WiFi
+// - **Dual RS-485 Interfaces**:
+//   - UART2 (Pins 16 RX, 17 TX): SUN2000 inverter communication
+//   - UART1 (Pins 18 RX, 19 TX): DTSU-666 energy meter communication
+// - **WiFi**: MQTT communication with reference meter
+//
+// ### Software Components
+// - **Simple Direct Proxy**: `simpleProxyTask()` handles main MODBUS communication
+// - **MQTT Task**: `mqttTask()` manages WiFi/MQTT for reference power data
+// - **ModbusRTU485 Library**: Custom library for MODBUS RTU protocol handling
+// - **Power Correction Engine**: Real-time IEEE 754 float modification
+//
+// ## Communication Flow
+//
+// ```
+// ┌─────────┐    MODBUS RTU     ┌─────────┐    MODBUS RTU     ┌─────────┐
+// │ SUN2000 │◄─────────────────►│  ESP32  │◄─────────────────►│DTSU-666 │
+// │Inverter │   9600 baud 8N1   │  Proxy  │   9600 baud 8N1   │ Meter   │
+// └─────────┘                   └─────────┘                   └─────────┘
+//                                    │
+//                                    │ WiFi/MQTT
+//                                    │ Power Reference
+//                                    ▼
+//                               ┌─────────┐
+//                               │ L&G     │
+//                               │ Meter   │
+//                               │(via MQTT)│
+//                               └─────────┘
+// ```
 //
 // ## Power Correction Algorithm
-// When new MQTT data arrives:
-// 1. Calculate power difference: P_LG - P_DTSU
-// 2. If difference > 500W → consumer detected between meters
-// 3. Add difference to DTSU-666 power values before forwarding to SUN2000
-// 4. Correction persists until next MQTT message arrives
 //
-// This ensures SUN2000 sees complete power consumption for optimal solar generation control.
+// **Objective**: Compensate for electrical loads between DTSU-666 and L&G meters
 //
-// ## Hardware Setup
-// - ESP32 with dual RS-485 interfaces
-// - SerialSUN (UART2): Pins 16 (RX), 17 (TX) - connects to SUN2000 inverter
-// - SerialDTU (UART1): Pins 18 (RX), 19 (TX) - connects to DTSU-666 energy meter
-// - WiFi connection for MQTT communication with Landis & Gyr meter data
+// **Process**:
+// 1. **MQTT Data Reception**: Receive L&G meter power data via MQTT
+// 2. **Power Difference Calculation**: `P_diff = P_LG - P_DTSU`
+// 3. **Threshold Check**: If `|P_diff| > 500W` → consumer load detected
+// 4. **Power Correction Application**: Add `P_diff` to DTSU-666 power values
+// 5. **Proportional Distribution**: Distribute correction across L1/L2/L3 phases
+// 6. **Persistent Correction**: Maintain correction until next MQTT update
 //
-// ## Message Flow
+// **Benefits**:
+// - SUN2000 sees complete power consumption for optimal generation control
+// - Accounts for loads between meter installation points
+// - Maintains power balance accuracy
+//
+// ## Data Processing
+//
+// ### DTSU-666 Data Format
+// - **Registers**: 2102-2181 (80 registers = 40 IEEE 754 floats)
+// - **Payload Size**: 160 bytes of measurement data
+// - **Float Format**: Big-endian IEEE 754 32-bit
+// - **Power Sign**: Negative = importing, Positive = exporting (DTSU controls)
+//
+// ### MQTT Data Format
+// - **Topic**: `MBUS/SENSOR` (Landis & Gyr meter data)
+// - **Format**: JSON with power import/export, voltage, current measurements
+// - **Power Calculation**: `P_net = (po - pi) * 1000` (kW to W conversion)
+//
+// ## Message Processing Pipeline
+//
 // ```
-// SUN2000 → [Request] → ESP32 → [Request] → DTSU-666
-//                         ↓
-//                   [Apply Power Correction]
-//                         ↓
-// SUN2000 ← [Corrected Reply] ← ESP32 ← [Reply] ← DTSU-666
-//                         ↑
-//                   [MQTT Reference Data]
-//                         ↑
-//                   Landis & Gyr Meter
+// 1. SUN2000 Request     → modbusSUN.read()
+// 2. Forward to DTSU     → SerialDTU.write()
+// 3. DTSU Response       → modbusDTU.read()
+// 4. Parse IEEE754       → parseDTSU666Reply()
+// 5. Apply Corrections   → applyPowerCorrections()
+// 6. Re-encode Data      → encodeDTSU666Reply()
+// 7. CRC Recalculation   → ModbusRTU485::crc16()
+// 8. Forward to SUN2000  → modbusSUN.write()
 // ```
+//
+// ## Key Technical Details
+//
+// - **MODBUS Slave ID**: 11 (DTSU-666)
+// - **Function Codes**: 0x03 (Read Holding), 0x04 (Read Input)
+// - **Correction Threshold**: 500W minimum difference
+// - **Phase Distribution**: Proportional based on existing loads
+// - **Error Handling**: Graceful degradation when MQTT unavailable
+// - **Thread Safety**: Mutex-protected shared data structures
+// - **Production Logging**: Streamlined output for monitoring
 //
 
 #include <Arduino.h>
