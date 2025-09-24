@@ -24,6 +24,20 @@
 // - **Power Correction Engine**: Real-time IEEE 754 float modification
 // - **Auto-Restart System**: Comprehensive failure detection and recovery
 //
+// ### System Architecture
+// ```
+// Core 0:                          Core 1:
+// ├── MQTT Task (Priority 1)       ├── Proxy Task (Priority 2)
+// │   ├── EVCC API polling (10s)   │   ├── MODBUS proxy
+// │   └── MQTT publishing          │   ├── Power correction
+// ├── Watchdog Task (Priority 3)   │   └── Heartbeat updates
+// │   ├── Health monitoring (5s)   │
+// │   ├── Failure detection        └── Clean 3-line output:
+// │   ├── MQTT error reporting         - DTSU: -5.2W
+// │   └── Auto-restart triggers        - API: 1840W (valid)
+// │                                     - SUN2000: 1834.8W (calc)
+// ```
+//
 // ## Communication Flow
 //
 // ```
