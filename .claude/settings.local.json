@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pio run:*)",
+      "Bash(copy:*)",
+      "Bash(dir:*)",
+      "Read(//d/Dropbox/Arduino/libraries/ModbusRTU485/**)",
+      "Bash(pio device:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
