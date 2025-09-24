@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is an ESP32-based MODBUS RTU proxy project with **intelligent power correction** that sits between a SUN2000 solar inverter and a DTSU-666 energy meter. The system compensates for power consumption between the meters (such as wallbox charging) by dynamically correcting the power values reported to the inverter.
+This is an ESP32-based MODBUS RTU proxy project with **intelligent power correction** that sits between a SUN2000 solar inverter and a DTSU-666 energy meter. The system compensates for wallbox power consumption by dynamically correcting power values reported to the inverter.
 
-**Primary Goal:** Integrate wallbox power consumption into the SUN2000 inverter's energy management system by correcting DTSU-666 readings to match the L&G reference meter at the grid connection point.
+**For complete technical specifications, see:** `Modbus_ProxyV1/Modbus-Proxy-FSD.md`
 
 ## Build System
 
@@ -23,103 +23,82 @@ This project uses PlatformIO for ESP32 development:
 - Configuration is in `Modbus_ProxyV1/platformio.ini`
 - Libraries are auto-managed by PlatformIO based on `lib_deps` in platformio.ini
 
-## Architecture
+## Development Rules & Guidelines
 
-**Hardware Setup:**
-- ESP32 with dual RS-485 interfaces
-- SerialSUN (UART2): Pins 16 (RX), 17 (TX) - connects to SUN2000 inverter
-- SerialDTU (UART1): Pins 18 (RX), 19 (TX) - connects to DTSU-666 meter
-- MODBUS RTU at 9600 baud, 8N1
+### Code Standards
+- **Follow existing conventions**: Mimic code style, use existing libraries and utilities
+- **Thread Safety**: Always use mutex protection for shared data structures
+- **Error Handling**: Implement comprehensive error handling with MQTT error reporting
+- **Memory Management**: Monitor heap usage, avoid memory leaks
+- **No Comments**: DO NOT ADD comments unless explicitly requested
 
-**Software Architecture:**
-- **Dual-core FreeRTOS design** with thread-safe inter-task communication
-- **Core 1:** `simpleProxyTask()` - High-priority MODBUS proxy with power correction
-- **Core 0:** `mqttTask()` - MQTT communications with L&G reference meter
-- **Uses ModbusRTU485 library** for all MODBUS operations
-- **Thread-safe shared memory** with semaphore protection for MQTT data
-- **Producer-consumer pattern** with FreeRTOS queues for MQTT publishing
-- Two `ModbusRTU485` instances: `modbusSUN` and `modbusDTU`
-- Library handles CRC validation, frame parsing, and inter-frame timing
-- Listens for requests from SUN2000, validates and proxies to DTSU-666
-- **Dynamically corrects DTSU-666 replies** before forwarding to SUN2000
-- Only processes requests for Slave ID 11
-- Supports MODBUS function codes: 0x03, 0x04, 0x06, 0x10
+### System Architecture Rules
+- **Dual-Core Design**: Maintain Core 0 (MQTT/Watchdog) and Core 1 (Proxy) separation
+- **Task Priorities**: Watchdog (3) > Proxy (2) > MQTT (1)
+- **Independent Watchdog**: Never remove or modify the independent watchdog task
+- **Thread-Safe Data Access**: Always use provided getter/setter functions for shared data
 
-**Key Functions:**
-- `ModbusRTU485::begin()` - Initialize library with serial port and baud rate
-- `ModbusRTU485::read()` - Read and parse MODBUS messages with timeout
-- `validateMessage()` - Validate message parameters (register counts, etc.)
-- `printMessage()` - Pretty-print MODBUS messages for debugging
-- `simpleProxyTask()` - Main proxy task with power correction
-- `mqttTask()` - MQTT communication handler for L&G meter data
-- `calculatePowerCorrection()` - Compare L&G and DTSU readings, apply corrections
-- `applyPowerCorrection()` - Modify DTSU reply frames with corrected power values
-- `parseDTSU666Reply()` - Parse DTSU-666 IEEE 754 float data
-- `encodeDTSU666Reply()` - Re-encode corrected power data back to MODBUS frame
+### Power Correction Rules
+- **EVCC API Integration**: Only use EVCC HTTP API, no MQTT reception
+- **Threshold Enforcement**: Only apply corrections above 1000W threshold
+- **IEEE 754 Handling**: Preserve exact byte-level float encoding/decoding
+- **CRC Integrity**: Always recalculate MODBUS CRC after data modifications
 
-**ModbusRTU485 Library Features:**
-- `ModbusMessage` struct contains parsed message details
-- `MBType` enum identifies Request/Reply/Exception/Unknown
-- Automatic CRC-16 validation
-- Proper inter-frame timing (3.5T character gaps)
-- Raw frame buffer preserved for forwarding
-- Built-in timeout handling
+### MODBUS Protocol Rules
+- **Slave ID 11 Only**: Only process messages for DTSU-666 (ID 11)
+- **Function Code Support**: 0x03, 0x04, 0x06, 0x10 only
+- **Register Range**: 2102-2181 (80 registers, 160 bytes IEEE 754 data)
+- **Raw Frame Preservation**: Maintain exact MODBUS frame structure
 
-**Power Correction Flow:**
-1. **L&G Reference Data:** MQTT task receives power data from L&G meter at grid connection
-2. **DTSU Measurement:** MODBUS proxy reads DTSU-666 power data (behind wallbox)
-3. **Difference Calculation:** Compare L&G net power vs DTSU net power
-4. **Wallbox Detection:** Power difference represents wallbox consumption between meters
-5. **Dynamic Correction:** Add difference to DTSU values (distributed equally across 3 phases)
-6. **SUN2000 Integration:** Corrected values ensure inverter sees total household consumption
+### Health Monitoring Rules
+- **Failure Thresholds**: Never disable or increase safety thresholds
+- **MQTT Error Reporting**: Always report errors to MQTT topics before restart
+- **Graceful Degradation**: System must continue proxy operation if power correction fails
+- **Restart Mechanisms**: Use ESP.restart() only, never halt or infinite loops
 
-**MODBUS Message Flow:**
-1. `modbusSUN.read()` - Waits for SUN2000 request
-2. Message validation and filtering (ID 11, Request type)
-3. Raw frame forwarding to DTSU-666 via `SerialDTU.write()`
-4. `modbusDTU.read()` - Waits for DTSU-666 reply
-5. **Power correction applied to reply data if active**
-6. Corrected frame forwarding back to SUN2000
+### Output & Logging Rules
+- **Clean Output**: Maintain 3-line format (DTSU, API, SUN2000)
+- **No Verbose Debug**: Avoid excessive logging, focus on essential data
+- **Error Visibility**: Always log critical errors to serial and MQTT
+- **Performance Data**: Include timing and memory usage in health reports
 
-**Example Correction:**
-- L&G meter: -881W (slight grid export)
-- DTSU-666: -5076W (significant export, doesn't see wallbox)
-- Wallbox consumption: ~4.2kW (difference between meters)
-- Correction applied: +4196W added to DTSU values
-- Result: SUN2000 sees accurate total household power flow including wallbox
+### Configuration Management
+- **Network Settings**: EVCC API URL, MQTT broker settings
+- **Timing Constants**: API polling (10s), health checks (5s), watchdog (60s)
+- **Safety Limits**: Memory threshold (20KB), failure counts
+- **Hardware Pins**: RS485 interfaces (UART1: 18/19, UART2: 16/17)
 
-## Dependencies
+### Testing & Validation
+- **Compile First**: Always run `pio run` to verify compilation
+- **No Assumptions**: Verify library availability before using new dependencies
+- **Integration Testing**: Test MODBUS, EVCC API, and MQTT functionality
+- **Memory Monitoring**: Check heap usage and stack watermarks
 
-- **ModbusRTU485** - Custom MODBUS RTU library (local implementation)
-- **PubSubClient** (^2.8) - MQTT client library for L&G meter communication
-- **ArduinoJson** (^6.19.4) - JSON processing for MQTT sensor data
-- **Arduino framework** on ESP32 platform
-- **FreeRTOS** - Real-time operating system for dual-core task management
+### Forbidden Actions
+- ❌ **No WiFi Config Changes**: Never modify WiFi setup or credentials
+- ❌ **No Task Priority Changes**: Never alter task priorities without system redesign
+- ❌ **No Watchdog Removal**: Never disable or remove watchdog functionality
+- ❌ **No CRC Shortcuts**: Never skip CRC validation or recalculation
+- ❌ **No Blocking Operations**: Avoid operations that could hang tasks
+- ❌ **No Direct Serial Access**: Use provided MODBUS library abstractions
 
-## Development Notes
+## Quick Reference
 
-- **All low-level MODBUS handling is done by ModbusRTU485 library**
-- Library provides clean API abstraction over raw serial communication
-- **Thread-safe architecture** with semaphore-protected shared memory
-- **Power correction threshold:** 500W minimum difference to activate correction
-- **Correction persistence:** Applied to all DTSU messages until next MQTT update
-- **Phase distribution:** Power corrections split equally across L1, L2, L3 phases
-- **IEEE 754 float handling** for DTSU-666 register parsing and encoding
-- Extensive debug logging to Serial (115200 baud) for troubleshooting
-- Buffer overflow protection handled by library (512 byte buffers)
-- Configurable timeouts for different operations
-- Error handling for malformed or oversized MODBUS frames
+**Key Files:**
+- `src/main.cpp` - Main implementation
+- `src/ModbusRTU485.h/.cpp` - MODBUS RTU library
+- `platformio.ini` - Build configuration
+- `Modbus-Proxy-FSD.md` - Complete technical specification
 
-## System Integration
+**Important Functions:**
+- `proxyTask()` - Main MODBUS proxy (Core 1)
+- `mqttTask()` - MQTT/API handler (Core 0)
+- `watchdogTask()` - System health monitor (Core 0)
+- `pollEvccApi()` - EVCC API polling
+- `calculatePowerCorrection()` - Power correction logic
 
-**Hardware Setup:**
-```
-Grid ←→ L&G Meter ←→ Wallbox ←→ DTSU-666 ←→ SUN2000 Inverter
-        (Reference)     (4.2kW)    (Proxy)      (Solar)
-```
-
-**Data Flow:**
-- L&G meter publishes power data via MQTT to ESP32
-- DTSU-666 measures power behind wallbox (missing wallbox consumption)
-- ESP32 calculates difference and applies correction
-- SUN2000 receives corrected values including wallbox power
+**Configuration Constants:**
+- `CORRECTION_THRESHOLD = 1000.0f` - Power correction minimum
+- `HTTP_POLL_INTERVAL = 10000` - EVCC API polling interval
+- `WATCHDOG_TIMEOUT_MS = 60000` - Task heartbeat timeout
+- `evccApiUrl = "http://192.168.0.202:7070/api/state"` - EVCC API endpoint
