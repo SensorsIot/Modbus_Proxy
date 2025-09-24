@@ -47,12 +47,11 @@ Core 0:                          Core 1:
 ├── MQTT Task (Priority 1)       ├── Proxy Task (Priority 2)
 │   ├── EVCC API polling (10s)   │   ├── MODBUS proxy
 │   └── MQTT publishing          │   ├── Power correction
-├── Watchdog Task (Priority 3)   │   └── Heartbeat updates
-│   ├── Health monitoring (5s)   │
-│   ├── Failure detection        └── Clean 3-line output:
-│   ├── MQTT error reporting         - DTSU: -5.2W
-│   └── Auto-restart triggers        - API: 1840W (valid)
-│                                     - SUN2000: 1834.8W (calc)
+├── Watchdog Task (Priority 3)   │   ├── Serial output (immediate):
+│   ├── Health monitoring (5s)   │   │   - DTSU: -5.2W
+│   ├── Failure detection        │   │   - API: 1840W (valid)
+│   ├── MQTT error reporting     │   │   - SUN2000: 1834.8W (calc)
+│   └── Auto-restart triggers    │   └── Heartbeat updates
 ```
 
 **Task Design:**
@@ -189,11 +188,13 @@ Result: SUN2000 sees accurate power flow including wallbox load
 
 ### 7.2 Error Reporting System
 **Serial Console Output:**
+The system provides clean 3-line status output immediately after power correction calculation in the proxy task:
 ```
 DTSU: -5.2W
 API: 1840W (valid)
 SUN2000: 1834.8W (DTSU -5.2W + correction 1840W)
 ```
+This output is generated synchronously in the proxy loop on Core 1, not as a separate task or operation.
 
 **MQTT Error Format:**
 ```json
@@ -287,10 +288,11 @@ const char* evccApiUrl = "http://192.168.0.202:7070/api/state";
 - **Task Hang**: Watchdog detection and system restart
 
 ### 10.3 Monitoring & Diagnostics
-- **Real-time Output**: Clean 3-line status display
-- **MQTT Telemetry**: Comprehensive system health data
+- **Real-time Output**: Clean 3-line status display (immediate in proxy task)
+- **MQTT Telemetry**: Comprehensive system health data (every 30s)
 - **Error Tracking**: Consecutive failure counters per subsystem
 - **Performance Metrics**: Response times, memory usage, uptime tracking
+- **Serial Console**: Immediate status updates in proxy processing loop
 
 ---
 
