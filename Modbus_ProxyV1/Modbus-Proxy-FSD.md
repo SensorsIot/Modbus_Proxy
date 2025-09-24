@@ -104,26 +104,28 @@ Core 0:                          Core 1:
 **SharedEVCCData:**
 ```cpp
 struct SharedEVCCData {
-    SemaphoreHandle_t mutex;
-    float chargePower;           // Wallbox charging power (W)
-    uint32_t timestamp;          // Last update timestamp
-    bool valid;                  // Data validity flag
-    uint32_t updateCount;        // Successful update counter
-    uint32_t errorCount;         // Error counter
+    SemaphoreHandle_t mutex;     // Mutex for thread-safe access
+    float chargePower;           // Charge power from EVCC API (W)
+    uint32_t timestamp;          // When data was last updated (millis)
+    bool valid;                  // Whether data is valid
+    uint32_t updateCount;        // Number of successful API calls
+    uint32_t errorCount;         // Number of failed API calls
 };
+SharedEVCCData sharedEVCC = {NULL, 0.0f, 0, false, 0, 0};
+const uint32_t EVCC_DATA_MAX_AGE_MS = 10000; // 10 seconds max age for EVCC data
 ```
 
 **SystemHealth:**
 ```cpp
 struct SystemHealth {
-    uint32_t proxyTaskLastSeen;     // Proxy task heartbeat
-    uint32_t mqttTaskLastSeen;      // MQTT task heartbeat
-    uint32_t evccConsecutiveFailures; // EVCC API failure counter
-    uint32_t mqttConsecutiveFailures; // MQTT failure counter
-    uint32_t modbusConsecutiveFailures; // MODBUS failure counter
-    uint32_t totalRestarts;         // System restart counter
-    uint32_t lastHealthCheck;      // Last health assessment
-    bool systemHealthy;            // Overall system status
+    uint32_t proxyTaskLastSeen;         // Proxy task heartbeat timestamp
+    uint32_t mqttTaskLastSeen;          // MQTT task heartbeat timestamp
+    uint32_t evccConsecutiveFailures;   // EVCC API consecutive failure counter
+    uint32_t mqttConsecutiveFailures;   // MQTT consecutive failure counter
+    uint32_t modbusConsecutiveFailures; // MODBUS consecutive failure counter
+    uint32_t totalRestarts;             // System restart counter
+    uint32_t lastHealthCheck;           // Last health check timestamp
+    bool systemHealthy;                 // Overall system health status
 };
 ```
 
@@ -140,17 +142,20 @@ struct SystemHealth {
 6. **CRC Recalculation**: Update MODBUS frame CRC after data modification
 
 ### 5.2 Correction Logic
-- **Objective**: Compensate for power consumption between DTSU-666 and grid connection point
-- **Method**: Add wallbox charging power to DTSU measurements
-- **Distribution**: Proportional across three phases based on existing load ratios
-- **Persistence**: Correction applied until next EVCC API update
+- **Objective**: Add wallbox charging power to DTSU-666 readings to compensate for consumption between DTSU and grid
+- **Method**: `powerCorrection = wallboxPower` (positive value adds wallbox load)
+- **Implementation**: `finalData.power_total += powerCorrection`
+- **Distribution**: Equal distribution across three phases (`powerCorrection / 3.0f`)
+- **Persistence**: Correction applied until next EVCC API update (10 seconds)
+- **Threshold**: Only applied if `fabs(wallboxPower) > 1000W`
 
 ### 5.3 Example Correction
 ```
 Original DTSU reading: -5076W (significant export, doesn't see wallbox)
-Wallbox power: +4200W (charging)
-Corrected value: -876W (net household consumption visible to SUN2000)
-Result: SUN2000 sees accurate power flow including wallbox load
+Wallbox charging power: +4200W (from EVCC API)
+Correction calculation: powerCorrection = +4200W
+Corrected DTSU value: -5076W + 4200W = -876W
+Result: SUN2000 sees accurate net power flow including wallbox consumption
 ```
 
 ---
@@ -159,7 +164,8 @@ Result: SUN2000 sees accurate power flow including wallbox load
 
 ### 6.1 Independent Watchdog Architecture
 - **Watchdog Task**: Runs on Core 0 with highest priority (3)
-- **Monitoring Frequency**: Health checks every 5 seconds
+- **Health Check Frequency**: Every 5 seconds (watchdog task loop)
+- **Health Reporting Frequency**: Every 30 seconds (MQTT status reports)
 - **Cross-Core Monitoring**: Independent monitoring of all system tasks
 - **Graceful Recovery**: 5-second delay for error transmission before restart
 
@@ -191,10 +197,16 @@ Result: SUN2000 sees accurate power flow including wallbox load
 The system provides clean 3-line status output immediately after power correction calculation in the proxy task:
 ```
 DTSU: -5.2W
-API: 1840W (valid)
+API:  1840W (valid)
 SUN2000: 1834.8W (DTSU -5.2W + correction 1840W)
 ```
-This output is generated synchronously in the proxy loop on Core 1, not as a separate task or operation.
+This output is generated synchronously in the proxy loop on Core 1, not as a separate task or operation. The actual implementation uses:
+```cpp
+Serial.printf("DTSU: %.1fW\n", dtsuData.power_total);
+Serial.printf("API:  %.1fW (%s)\n", currentWallboxPower, hasValidApiData ? "valid" : "stale");
+Serial.printf("SUN2000: %.1fW (DTSU %.1fW + correction %.1fW)\n",
+              sun2000Value, dtsuData.power_total, correctionApplied ? powerCorrection : 0.0f);
+```
 
 **MQTT Error Format:**
 ```json
@@ -216,29 +228,34 @@ This output is generated synchronously in the proxy loop on Core 1, not as a sep
 ### 8.1 System Constants
 ```cpp
 // Hardware Configuration
-RS485_SUN2000_RX_PIN = 16, RS485_SUN2000_TX_PIN = 17
-RS485_DTU_RX_PIN = 18, RS485_DTU_TX_PIN = 19
-MODBUS_BAUDRATE = 9600
+#define RS485_SUN2000_RX_PIN 16
+#define RS485_SUN2000_TX_PIN 17
+#define RS485_DTU_RX_PIN 18
+#define RS485_DTU_TX_PIN 19
+#define MODBUS_BAUDRATE 9600
 
 // Power Correction
-CORRECTION_THRESHOLD = 1000.0f  // Minimum wallbox power (W)
+const float CORRECTION_THRESHOLD = 1000.0f;  // Minimum wallbox power (W)
 
 // Timing Configuration
-HTTP_POLL_INTERVAL = 10000      // EVCC API polling (ms)
-WATCHDOG_TIMEOUT_MS = 60000     // Task heartbeat timeout (ms)
-HEALTH_CHECK_INTERVAL_MS = 30000 // Health status reporting (ms)
+const uint32_t HTTP_POLL_INTERVAL = 10000;         // EVCC API polling (ms)
+const uint32_t DTSU_POLL_INTERVAL_MS = 1500;       // DTSU polling interval (ms)
+const uint32_t WATCHDOG_TIMEOUT_MS = 60000;        // Task heartbeat timeout (ms)
+const uint32_t HEALTH_CHECK_INTERVAL_MS = 30000;   // Health status reporting (ms)
+const uint32_t EVCC_DATA_MAX_AGE_MS = 10000;       // Maximum EVCC data age (ms)
 
 // Failure Thresholds
-EVCC_FAILURE_THRESHOLD = 20     // API failures before restart
-MQTT_FAILURE_THRESHOLD = 50     // MQTT failures before restart
-MODBUS_FAILURE_THRESHOLD = 10   // MODBUS failures before restart
-MIN_FREE_HEAP = 20000          // Memory threshold (bytes)
+const uint32_t EVCC_FAILURE_THRESHOLD = 20;        // API failures before restart
+const uint32_t MQTT_FAILURE_THRESHOLD = 50;        // MQTT failures before restart
+const uint32_t MODBUS_FAILURE_THRESHOLD = 10;      // MODBUS failures before restart
+const uint32_t MIN_FREE_HEAP = 20000;              // Memory threshold (bytes)
 ```
 
 ### 8.2 Network Configuration
 ```cpp
 // EVCC API
 const char* evccApiUrl = "http://192.168.0.202:7070/api/state";
+// Data extraction: loadpoints[0].chargePower
 
 // MQTT Topics
 "MBUS-PROXY/DATA"    // Corrected power data
@@ -264,6 +281,7 @@ const char* evccApiUrl = "http://192.168.0.202:7070/api/state";
   - Proxy Task: 4096 bytes
   - MQTT Task: 3072 bytes
   - Watchdog Task: 2048 bytes
+- **Heap Monitoring**: Automatic restart if free heap < 20KB
 
 ### 9.3 Reliability Metrics
 - **System Uptime**: Continuously monitored and reported
