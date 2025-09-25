@@ -1,0 +1,87 @@
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+.vscode/
+.clang_complete
+.gcc-flags.json
+.ccls
+.cache/
+
+# Build artifacts
+build/
+.build/
+*.bin
+*.elf
+*.map
+*.hex
+*.lst
+
+# Compiled Object files
+*.o
+*.obj
+
+# Libraries
+lib/
+!lib/readme.txt
+
+# IDE files
+*.code-workspace
+.vscode/settings.json
+.vscode/launch.json
+.vscode/tasks.json
+.vscode/c_cpp_properties.json
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*~
+
+# Credentials and sensitive data
+credentials.h.bak
+*_backup.*
+*.secret
+
+# Logs
+*.log
+debug.log
+serial.log
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# ESP32 specific
+sdkconfig
+sdkconfig.old
+components/
+main/component.mk
+
+# Arduino IDE
+*.fqbn
+*.bak
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+.env
+
+# Node.js (if using any web tools)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
