@@ -4,7 +4,7 @@
 [![ESP32-S3](https://img.shields.io/badge/ESP32--S3-Supported-blue.svg)](https://www.espressif.com/en/products/socs/esp32-s3)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-A sophisticated power monitoring system that sits between a SUN2000 solar inverter and a DTSU-666 energy meter, providing real-time power correction by integrating wallbox charging data from an EVCC system.
+A sophisticated power monitoring system that sits between a SUN2000 solar inverter and a DTSU-666 energy meter, providing real-time power correction by integrating wallbox charging data from an EVCC system. This was needed because the Wallbox is outside the Solar loop, but connected to our home. With this method, the Solar loop contains also the wallbox. So the inverter can optimize the entire consumption to 0 for the entire home.
 
 ## 🎯 Overview
 
