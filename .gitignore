@@ -32,8 +32,9 @@ lib/
 .vscode/c_cpp_properties.json
 # Keep .vscode/extensions.json and .vscode/tasks.json for project setup
 
-# Claude Code IDE settings (keep CLAUDE.md documentation)
+# Claude Code IDE
 .claude/
+CLAUDE.md
 
 # OS generated files
 .DS_Store
