@@ -2,9 +2,9 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "PIO: Upload (esp32dev)",
+      "label": "PIO: Upload (esp32-s3)",
       "type": "shell",
-      "command": "pio run -e esp32dev -t upload",
+      "command": "pio run -e esp32-s3-devkitc-1 -t upload",
       "options": {
         "cwd": "${workspaceFolder}"
       },
@@ -22,7 +22,7 @@
     {
       "label": "PIO: Upload and Monitor",
       "dependsOn": [
-        "PIO: Upload (esp32dev)",
+        "PIO: Upload (esp32-s3)",
         "PIO: Monitor (115200)"
       ],
       "dependsOrder": "sequence"
