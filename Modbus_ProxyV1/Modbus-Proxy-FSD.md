@@ -34,10 +34,12 @@ Grid ←→ L&G Meter ←→ Wallbox ←→ DTSU-666 ←→ SUN2000 Inverter
 ```
 
 **Hardware Components:**
-- **ESP32**: Dual-core microcontroller with WiFi capability
+- **ESP32-S3**: Dual-core microcontroller with WiFi capability (lolin_s3_mini board)
+- **Network Identity**: Advertises as "Modbus-Proxy" hostname
 - **Dual RS-485 Interfaces**:
-  - UART2 (Pins 16 RX, 17 TX): SUN2000 inverter communication
-  - UART1 (Pins 18 RX, 19 TX): DTSU-666 energy meter communication
+  - UART2 (Pins 1 TX, 2 RX): SUN2000 inverter communication
+  - UART1 (Pins 3 TX, 4 RX): DTSU-666 energy meter communication
+- **Status LED**: GPIO 48 (onboard LED) shows SUN2000 interface activity
 - **Communication Protocol**: MODBUS RTU at 9600 baud, 8N1
 
 ### 2.2 Software Architecture
@@ -45,8 +47,10 @@ Grid ←→ L&G Meter ←→ Wallbox ←→ DTSU-666 ←→ SUN2000 Inverter
 ```
 Core 0:                          Core 1:
 ├── MQTT Task (Priority 1)       ├── Proxy Task (Priority 2)
+│   │   Stack: 16KB              │   │   Stack: 4KB
 │   ├── EVCC API polling (10s)   │   ├── MODBUS proxy
-│   └── MQTT publishing          │   ├── Power correction
+│   ├── JSON parsing (8KB buf)   │   ├── Power correction
+│   └── MQTT publishing          │   ├── LED activity indication
 ├── Watchdog Task (Priority 3)   │   ├── Serial output (immediate):
 │   ├── Health monitoring (5s)   │   │   - DTSU: -5.2W
 │   ├── Failure detection        │   │   - API: 1840W (valid)
@@ -74,9 +78,11 @@ Core 0:                          Core 1:
 ### 3.2 EVCC HTTP API
 - **URL**: `http://192.168.0.202:7070/api/state`
 - **Method**: GET with JSON response
-- **Data Path**: `loadpoints[0].chargePower`
+- **Data Path**: `loadpoints[0].chargePower` (wallbox power in watts)
 - **Polling Interval**: 10 seconds
+- **Buffer Size**: StaticJsonDocument<8192> for JSON parsing
 - **Error Handling**: Automatic retry with failure counting
+- **Hostname**: Device advertises as "Modbus-Proxy" on network
 
 ### 3.3 MQTT Communication
 **Published Topics:**
@@ -227,11 +233,12 @@ Serial.printf("SUN2000: %.1fW (DTSU %.1fW + correction %.1fW)\n",
 
 ### 8.1 System Constants
 ```cpp
-// Hardware Configuration
-#define RS485_SUN2000_RX_PIN 16
-#define RS485_SUN2000_TX_PIN 17
-#define RS485_DTU_RX_PIN 18
-#define RS485_DTU_TX_PIN 19
+// Hardware Configuration (ESP32-S3 lolin_s3_mini)
+#define RS485_SUN2000_RX_PIN 2
+#define RS485_SUN2000_TX_PIN 1
+#define RS485_DTU_RX_PIN 4
+#define RS485_DTU_TX_PIN 3
+#define STATUS_LED_PIN 48
 #define MODBUS_BAUDRATE 9600
 
 // Power Correction
@@ -253,6 +260,11 @@ const uint32_t MIN_FREE_HEAP = 20000;              // Memory threshold (bytes)
 
 ### 8.2 Network Configuration
 ```cpp
+// Device Identity
+WiFi.setHostname("Modbus-Proxy");           // Network hostname
+ArduinoOTA.setHostname("Modbus-Proxy");     // OTA discovery name
+// mDNS address: Modbus-Proxy.local
+
 // EVCC API
 const char* evccApiUrl = "http://192.168.0.202:7070/api/state";
 // Data extraction: loadpoints[0].chargePower
@@ -261,6 +273,10 @@ const char* evccApiUrl = "http://192.168.0.202:7070/api/state";
 "MBUS-PROXY/DATA"    // Corrected power data
 "MBUS-PROXY/ERROR"   // Error notifications
 "MBUS-PROXY/HEALTH"  // System health status
+
+// OTA Configuration
+upload_port = Modbus-Proxy.local
+upload_flags = --auth=modbus_ota_2023
 ```
 
 ---
@@ -275,12 +291,13 @@ const char* evccApiUrl = "http://192.168.0.202:7070/api/state";
 - **MQTT Publishing**: Real-time with queue buffering
 
 ### 9.2 Memory Requirements
-- **Total RAM Usage**: ~49KB (15% of 327KB available)
-- **Flash Usage**: ~937KB (71.5% of 1310KB available)
+- **Total RAM Usage**: ~54KB (16.5% of 327KB available)
+- **Flash Usage**: ~946KB (72.2% of 1310KB available)
 - **Stack Allocation**:
   - Proxy Task: 4096 bytes
-  - MQTT Task: 3072 bytes
+  - MQTT Task: 16384 bytes (16KB for JSON processing)
   - Watchdog Task: 2048 bytes
+- **JSON Buffer**: StaticJsonDocument<8192> for EVCC API parsing
 - **Heap Monitoring**: Automatic restart if free heap < 20KB
 
 ### 9.3 Reliability Metrics
