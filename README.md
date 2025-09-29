@@ -33,7 +33,7 @@ Grid ←→ L&G Meter ←→ Wallbox ←→ DTSU-666 ←→ SUN2000 Inverter
 
 ### Hardware Requirements
 
-- **ESP32-S3** (lolin_s3_mini board recommended)
+- **ESP32-S3** (I   use a Supermini board)
 - **Dual RS-485 Interfaces**:
   - UART2 (RS485_SUN2000_TX_PIN, RS485_SUN2000_RX_PIN): SUN2000 inverter
   - UART1 (RS485_DTU_TX_PIN, RS485_DTU_RX_PIN): DTSU-666 energy meter
