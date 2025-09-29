@@ -35,8 +35,8 @@ Grid ←→ L&G Meter ←→ Wallbox ←→ DTSU-666 ←→ SUN2000 Inverter
 
 - **ESP32-S3** (lolin_s3_mini board recommended)
 - **Dual RS-485 Interfaces**:
-  - UART2 (GPIO 1 TX, 2 RX): SUN2000 inverter
-  - UART1 (GPIO 3 TX, 4 RX): DTSU-666 energy meter
+  - UART2 (RS485_SUN2000_TX_PIN, RS485_SUN2000_RX_PIN): SUN2000 inverter
+  - UART1 (RS485_DTU_TX_PIN, RS485_DTU_RX_PIN): DTSU-666 energy meter
 - **Status LED**: GPIO 48 (onboard LED)
 - **Power Supply**: 5V via USB-C or external supply
 
@@ -123,10 +123,10 @@ The device advertises as `Modbus-Proxy` on your network:
 
 ```cpp
 // ESP32-S3 GPIO Configuration
-#define RS485_SUN2000_TX_PIN 1     // SUN2000 inverter (UART2)
-#define RS485_SUN2000_RX_PIN 2
-#define RS485_DTU_TX_PIN 3         // DTSU-666 meter (UART1)
-#define RS485_DTU_RX_PIN 4
+#define RS485_SUN2000_RX_PIN 4     // SUN2000 inverter (UART2)
+#define RS485_SUN2000_TX_PIN 3
+#define RS485_DTU_RX_PIN 13        // DTSU-666 meter (UART1)
+#define RS485_DTU_TX_PIN 12
 #define STATUS_LED_PIN 48          // Onboard LED activity indicator
 ```
 

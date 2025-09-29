@@ -37,8 +37,8 @@ Grid ←→ L&G Meter ←→ Wallbox ←→ DTSU-666 ←→ SUN2000 Inverter
 - **ESP32-S3**: Dual-core microcontroller with WiFi capability (lolin_s3_mini board)
 - **Network Identity**: Advertises as "Modbus-Proxy" hostname
 - **Dual RS-485 Interfaces**:
-  - UART2 (Pins 1 TX, 2 RX): SUN2000 inverter communication
-  - UART1 (Pins 3 TX, 4 RX): DTSU-666 energy meter communication
+  - UART2 (RS485_SUN2000_TX_PIN, RS485_SUN2000_RX_PIN): SUN2000 inverter communication
+  - UART1 (RS485_DTU_TX_PIN, RS485_DTU_RX_PIN): DTSU-666 energy meter communication
 - **Status LED**: GPIO 48 (onboard LED) shows SUN2000 interface activity
 - **Communication Protocol**: MODBUS RTU at 9600 baud, 8N1
 
@@ -86,9 +86,22 @@ Core 0:                          Core 1:
 
 ### 3.3 MQTT Communication
 **Published Topics:**
-- `MBUS-PROXY/DATA`: Corrected power data with timestamps
-- `MBUS-PROXY/ERROR`: Error events with context and error codes
-- `MBUS-PROXY/HEALTH`: System health status (every 30 seconds)
+- `MBUS-PROXY/power`: Essential power data (DTSU, wallbox, SUN2000) published every MODBUS transaction
+- `MBUS-PROXY/health`: System health status published every 60 seconds
+
+**Power Topic Payload:**
+```json
+{"dtsu":-18.5,"wallbox":0.0,"sun2000":-18.5,"active":false}
+```
+- `dtsu`: Power reading from DTSU-666 meter (W)
+- `wallbox`: Power consumption from EVCC API (W)
+- `sun2000`: Corrected power value sent to SUN2000 inverter (W)
+- `active`: Whether power correction is currently being applied
+
+**Health Topic Payload:**
+```json
+{"uptime":123456,"heap":54000,"mqtt_reconnects":2,"errors":0}
+```
 
 ---
 
@@ -214,18 +227,20 @@ Serial.printf("SUN2000: %.1fW (DTSU %.1fW + correction %.1fW)\n",
               sun2000Value, dtsuData.power_total, correctionApplied ? powerCorrection : 0.0f);
 ```
 
-**MQTT Error Format:**
+**MQTT Power Data Format:**
 ```json
 {
-    "timestamp": 123456,
-    "error_type": "EVCC_API",
-    "error_message": "HTTP error",
-    "error_code": 404,
-    "free_heap": 45000,
-    "uptime": 3600,
-    "restart_count": 2
+    "dtsu": -18.5,        // DTSU-666 meter reading (W)
+    "wallbox": 4140.0,    // Wallbox power from EVCC API (W)
+    "sun2000": 4121.5,    // Corrected value sent to SUN2000 (W)
+    "active": true        // Power correction active status
 }
 ```
+
+**Publishing Frequency:**
+- Power data: Every MODBUS transaction (~1-2 seconds)
+- Health data: Every 60 seconds
+- Payload size: ~60-70 bytes (optimized for MQTT broker limits)
 
 ---
 
@@ -234,10 +249,10 @@ Serial.printf("SUN2000: %.1fW (DTSU %.1fW + correction %.1fW)\n",
 ### 8.1 System Constants
 ```cpp
 // Hardware Configuration (ESP32-S3 lolin_s3_mini)
-#define RS485_SUN2000_RX_PIN 2
-#define RS485_SUN2000_TX_PIN 1
-#define RS485_DTU_RX_PIN 4
-#define RS485_DTU_TX_PIN 3
+#define RS485_SUN2000_RX_PIN 4
+#define RS485_SUN2000_TX_PIN 3
+#define RS485_DTU_RX_PIN 13
+#define RS485_DTU_TX_PIN 12
 #define STATUS_LED_PIN 48
 #define MODBUS_BAUDRATE 9600
 
@@ -270,9 +285,8 @@ const char* evccApiUrl = "http://192.168.0.202:7070/api/state";
 // Data extraction: loadpoints[0].chargePower
 
 // MQTT Topics
-"MBUS-PROXY/DATA"    // Corrected power data
-"MBUS-PROXY/ERROR"   // Error notifications
-"MBUS-PROXY/HEALTH"  // System health status
+"MBUS-PROXY/power"   // Essential power data (dtsu, wallbox, sun2000, active)
+"MBUS-PROXY/health"  // System health status
 
 // OTA Configuration
 upload_port = Modbus-Proxy.local
@@ -324,7 +338,9 @@ upload_flags = --auth=modbus_ota_2023
 
 ### 10.3 Monitoring & Diagnostics
 - **Real-time Output**: Clean 3-line status display (immediate in proxy task)
-- **MQTT Telemetry**: Comprehensive system health data (every 30s)
+- **MQTT Telemetry**:
+  - Power data: Essential 4 values every MODBUS transaction
+  - Health data: System metrics every 60 seconds
 - **Error Tracking**: Consecutive failure counters per subsystem
 - **Performance Metrics**: Response times, memory usage, uptime tracking
 - **Serial Console**: Immediate status updates in proxy processing loop

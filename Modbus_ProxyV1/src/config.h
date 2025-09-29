@@ -1,10 +1,10 @@
 #pragma once
 
-// ESP32-S3 Pin definitions (GPIO 1-13 constraint)
-#define RS485_SUN2000_RX_PIN 2
-#define RS485_SUN2000_TX_PIN 1
-#define RS485_DTU_RX_PIN 4
-#define RS485_DTU_TX_PIN 3
+// ESP32-S3 Pin definitions (GPIO 3/4 and 12/13)
+#define RS485_SUN2000_RX_PIN 4
+#define RS485_SUN2000_TX_PIN 3
+#define RS485_DTU_RX_PIN 13
+#define RS485_DTU_TX_PIN 12
 
 // Status LED pin (GPIO48 is the onboard LED)
 #define STATUS_LED_PIN 48
@@ -83,3 +83,11 @@ const uint32_t MIN_FREE_HEAP = 20000;
 
 // MQTT settings
 const int mqttPort = 1883;
+
+// MQTT topics - hierarchical structure under MBUS-PROXY
+#define MQTT_TOPIC_ROOT "MBUS-PROXY"
+#define MQTT_TOPIC_POWER MQTT_TOPIC_ROOT "/power"
+#define MQTT_TOPIC_HEALTH MQTT_TOPIC_ROOT "/health"
+#define MQTT_TOPIC_STATUS MQTT_TOPIC_ROOT "/status"
+#define MQTT_TOPIC_DTSU MQTT_TOPIC_ROOT "/dtsu"
+#define MQTT_TOPIC_DEBUG MQTT_TOPIC_ROOT "/debug"
