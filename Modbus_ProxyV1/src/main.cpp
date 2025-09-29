@@ -101,7 +101,7 @@ void setup() {
     }
     Serial.println("🚀 ESP32-S3 MODBUS PROXY starting...");
     Serial.printf("📅 Build: %s %s\n", __DATE__, __TIME__);
-    Serial.println("🎯 Mode: Modular ESP32-S3 proxy with GPIO 1-4");
+    Serial.println("🎯 Mode: Modular ESP32-S3 proxy with configurable GPIO pins");
 
     // Initialize status LED
     pinMode(STATUS_LED_PIN, OUTPUT);

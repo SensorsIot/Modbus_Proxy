@@ -175,7 +175,7 @@ bool publishDTSUData(const DTSU666Data& data) {
 
   doc["frequency"] = data.frequency;
 
-  return mqttPublishJSON("sensors/dtsu666", doc);
+  return mqttPublishJSON(MQTT_TOPIC_DTSU, doc);
 }
 
 bool publishSystemHealth(const SystemHealth& health) {
@@ -196,7 +196,7 @@ bool publishSystemHealth(const SystemHealth& health) {
   doc["power_correction"] = health.lastPowerCorrection;
   doc["correction_active"] = health.powerCorrectionActive;
 
-  return mqttPublishJSON("status/health", doc);
+  return mqttPublishJSON(MQTT_TOPIC_HEALTH, doc);
 }
 
 bool publishPowerData(const DTSU666Data& dtsuData, float correction, bool correctionActive) {
@@ -211,7 +211,7 @@ bool publishPowerData(const DTSU666Data& dtsuData, float correction, bool correc
   doc["correction_active"] = correctionActive;
   doc["sun2000_power"] = dtsuData.power_total + (correctionActive ? correction : 0.0f);
 
-  return mqttPublishJSON("power/correction", doc);
+  return mqttPublishJSON(MQTT_TOPIC_STATUS, doc);
 }
 
 void queueCorrectedPowerData(const DTSU666Data& finalData, const DTSU666Data& originalData,
@@ -246,33 +246,17 @@ void processMQTTQueue() {
   MQTTPublishItem item;
   if (xQueueReceive(mqttPublishQueue, &item, 10 / portTICK_PERIOD_MS) == pdTRUE) {
     if (mqttClient.connected()) {
-      StaticJsonDocument<512> doc;
-      doc["timestamp"] = item.timestamp;
-      doc["device"] = "ESP32_ModbusProxy";
-      doc["source"] = "DTSU-666_corrected";
+      StaticJsonDocument<256> doc;
 
-      doc["SUN2000_power_total"] = item.correctedData.power_total;
-      doc["SUN2000_power_L1"] = item.correctedData.power_L1;
-      doc["SUN2000_power_L2"] = item.correctedData.power_L2;
-      doc["SUN2000_power_L3"] = item.correctedData.power_L3;
+      // The three key power values that matter
+      doc["dtsu"] = item.originalData.power_total;      // What DTSU meter reads
+      doc["wallbox"] = item.correctionValue;            // Wallbox power from EVCC
+      doc["sun2000"] = item.correctedData.power_total;  // What SUN2000 inverter sees
 
-      doc["DTSU_power_total"] = item.originalData.power_total;
-      doc["DTSU_power_L1"] = item.originalData.power_L1;
-      doc["DTSU_power_L2"] = item.originalData.power_L2;
-      doc["DTSU_power_L3"] = item.originalData.power_L3;
+      // Validation: dtsu + wallbox should equal sun2000
+      doc["active"] = item.correctionApplied;
 
-      doc["correction_applied"] = item.correctionApplied;
-      doc["correction_value"] = item.correctionValue;
-
-      doc["voltage_L1N"] = item.correctedData.voltage_L1N;
-      doc["voltage_L2N"] = item.correctedData.voltage_L2N;
-      doc["voltage_L3N"] = item.correctedData.voltage_L3N;
-      doc["current_L1"] = item.correctedData.current_L1;
-      doc["current_L2"] = item.correctedData.current_L2;
-      doc["current_L3"] = item.correctedData.current_L3;
-      doc["frequency"] = item.correctedData.frequency;
-
-      mqttPublishJSON("power/corrected", doc);
+      mqttPublishJSON(MQTT_TOPIC_POWER, doc);
     } else {
       Serial.println("⚠️ MQTT not connected, dropping queued data");
     }

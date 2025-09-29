@@ -105,6 +105,11 @@ void proxyTask(void *pvParameters) {
               DTSU666Data dtsuData;
               if (parseDTSU666Response(dtsuMsg.raw, dtsuMsg.len, dtsuData)) {
                 dtsu666Data = dtsuData;
+
+                // Debug: DTSU received values
+                Serial.printf("📥 DTSU->Proxy: P_tot=%.1fW P_L1=%.1fW P_L2=%.1fW P_L3=%.1fW I_L1=%.2fA I_L2=%.2fA I_L3=%.2fA\n",
+                              dtsuData.power_total, dtsuData.power_L1, dtsuData.power_L2, dtsuData.power_L3,
+                              dtsuData.current_L1, dtsuData.current_L2, dtsuData.current_L3);
                 calculatePowerCorrection();
 
                 DTSU666Data finalData = dtsuData;
@@ -155,6 +160,15 @@ void proxyTask(void *pvParameters) {
             }
 
             uint32_t sunReplyStart = millis();
+
+            // Debug: Parse final data being sent to SUN2000
+            DTSU666Data finalSentData;
+            if (parseDTSU666Response(dtsuMsg.raw, dtsuMsg.len, finalSentData)) {
+              Serial.printf("📤 Proxy->SUN2000: P_tot=%.1fW P_L1=%.1fW P_L2=%.1fW P_L3=%.1fW I_L1=%.2fA I_L2=%.2fA I_L3=%.2fA\n",
+                            finalSentData.power_total, finalSentData.power_L1, finalSentData.power_L2, finalSentData.power_L3,
+                            finalSentData.current_L1, finalSentData.current_L2, finalSentData.current_L3);
+            }
+
             size_t sunWritten = SerialSUN.write(dtsuMsg.raw, dtsuMsg.len);
             SerialSUN.flush();
 

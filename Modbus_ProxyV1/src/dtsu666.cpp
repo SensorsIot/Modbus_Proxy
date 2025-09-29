@@ -305,36 +305,109 @@ bool applyPowerCorrection(uint8_t* raw, uint16_t len, float correction) {
   if (!raw || len < 165) return false;
 
   uint8_t* payload = raw + 3;
-  size_t totalPowerOffset = 12 * 4;
-
-  uint8_t* bytes = payload + totalPowerOffset;
   union { uint32_t u; float f; } converter;
-  converter.u = (uint32_t(bytes[0]) << 24) | (uint32_t(bytes[1]) << 16) |
-                (uint32_t(bytes[2]) << 8)  | uint32_t(bytes[3]);
 
-  float originalPower = converter.f * -1.0f;
-  float correctedPower = originalPower + correction;
-  converter.f = correctedPower * -1.0f;
+  // 1. Correct phase powers (distribute wallbox power evenly across 3 phases)
+  float wallboxPowerPerPhase = correction / 3.0f;
 
-  bytes[0] = (converter.u >> 24) & 0xFF;
-  bytes[1] = (converter.u >> 16) & 0xFF;
-  bytes[2] = (converter.u >> 8)  & 0xFF;
-  bytes[3] = converter.u         & 0xFF;
+  // Power L1 at offset 13*4 = 52
+  uint8_t* powerL1Bytes = payload + 52;
+  converter.u = (uint32_t(powerL1Bytes[0]) << 24) | (uint32_t(powerL1Bytes[1]) << 16) |
+                (uint32_t(powerL1Bytes[2]) << 8)  | uint32_t(powerL1Bytes[3]);
+  float correctedPowerL1 = converter.f + wallboxPowerPerPhase;
+  converter.f = correctedPowerL1;
+  powerL1Bytes[0] = (converter.u >> 24) & 0xFF;
+  powerL1Bytes[1] = (converter.u >> 16) & 0xFF;
+  powerL1Bytes[2] = (converter.u >> 8)  & 0xFF;
+  powerL1Bytes[3] = converter.u         & 0xFF;
 
+  // Power L2 at offset 14*4 = 56
+  uint8_t* powerL2Bytes = payload + 56;
+  converter.u = (uint32_t(powerL2Bytes[0]) << 24) | (uint32_t(powerL2Bytes[1]) << 16) |
+                (uint32_t(powerL2Bytes[2]) << 8)  | uint32_t(powerL2Bytes[3]);
+  float correctedPowerL2 = converter.f + wallboxPowerPerPhase;
+  converter.f = correctedPowerL2;
+  powerL2Bytes[0] = (converter.u >> 24) & 0xFF;
+  powerL2Bytes[1] = (converter.u >> 16) & 0xFF;
+  powerL2Bytes[2] = (converter.u >> 8)  & 0xFF;
+  powerL2Bytes[3] = converter.u         & 0xFF;
+
+  // Power L3 at offset 15*4 = 60
+  uint8_t* powerL3Bytes = payload + 60;
+  converter.u = (uint32_t(powerL3Bytes[0]) << 24) | (uint32_t(powerL3Bytes[1]) << 16) |
+                (uint32_t(powerL3Bytes[2]) << 8)  | uint32_t(powerL3Bytes[3]);
+  float correctedPowerL3 = converter.f + wallboxPowerPerPhase;
+  converter.f = correctedPowerL3;
+  powerL3Bytes[0] = (converter.u >> 24) & 0xFF;
+  powerL3Bytes[1] = (converter.u >> 16) & 0xFF;
+  powerL3Bytes[2] = (converter.u >> 8)  & 0xFF;
+  powerL3Bytes[3] = converter.u         & 0xFF;
+
+  // 2. Correct total power (add wallbox power)
+  size_t totalPowerOffset = 12 * 4;
+  uint8_t* powerBytes = payload + totalPowerOffset;
+  converter.u = (uint32_t(powerBytes[0]) << 24) | (uint32_t(powerBytes[1]) << 16) |
+                (uint32_t(powerBytes[2]) << 8)  | uint32_t(powerBytes[3]);
+
+  float originalPower = converter.f;
+  float correctedPower = originalPower + correction;  // ADD wallbox power (back to addition)
+  converter.f = correctedPower;
+
+  powerBytes[0] = (converter.u >> 24) & 0xFF;
+  powerBytes[1] = (converter.u >> 16) & 0xFF;
+  powerBytes[2] = (converter.u >> 8)  & 0xFF;
+  powerBytes[3] = converter.u         & 0xFF;
+
+  // 3. Correct phase demands (distribute wallbox power evenly across 3 phases)
+  // Demand L1 at offset 29*4 = 116
+  uint8_t* demandL1Bytes = payload + 116;
+  converter.u = (uint32_t(demandL1Bytes[0]) << 24) | (uint32_t(demandL1Bytes[1]) << 16) |
+                (uint32_t(demandL1Bytes[2]) << 8)  | uint32_t(demandL1Bytes[3]);
+  float correctedDemandL1 = converter.f + wallboxPowerPerPhase;
+  converter.f = correctedDemandL1;
+  demandL1Bytes[0] = (converter.u >> 24) & 0xFF;
+  demandL1Bytes[1] = (converter.u >> 16) & 0xFF;
+  demandL1Bytes[2] = (converter.u >> 8)  & 0xFF;
+  demandL1Bytes[3] = converter.u         & 0xFF;
+
+  // Demand L2 at offset 30*4 = 120
+  uint8_t* demandL2Bytes = payload + 120;
+  converter.u = (uint32_t(demandL2Bytes[0]) << 24) | (uint32_t(demandL2Bytes[1]) << 16) |
+                (uint32_t(demandL2Bytes[2]) << 8)  | uint32_t(demandL2Bytes[3]);
+  float correctedDemandL2 = converter.f + wallboxPowerPerPhase;
+  converter.f = correctedDemandL2;
+  demandL2Bytes[0] = (converter.u >> 24) & 0xFF;
+  demandL2Bytes[1] = (converter.u >> 16) & 0xFF;
+  demandL2Bytes[2] = (converter.u >> 8)  & 0xFF;
+  demandL2Bytes[3] = converter.u         & 0xFF;
+
+  // Demand L3 at offset 31*4 = 124
+  uint8_t* demandL3Bytes = payload + 124;
+  converter.u = (uint32_t(demandL3Bytes[0]) << 24) | (uint32_t(demandL3Bytes[1]) << 16) |
+                (uint32_t(demandL3Bytes[2]) << 8)  | uint32_t(demandL3Bytes[3]);
+  float correctedDemandL3 = converter.f + wallboxPowerPerPhase;
+  converter.f = correctedDemandL3;
+  demandL3Bytes[0] = (converter.u >> 24) & 0xFF;
+  demandL3Bytes[1] = (converter.u >> 16) & 0xFF;
+  demandL3Bytes[2] = (converter.u >> 8)  & 0xFF;
+  demandL3Bytes[3] = converter.u         & 0xFF;
+
+  // 4. Correct total demand (add wallbox power)
   size_t demandTotalOffset = 28 * 4;
-  bytes = payload + demandTotalOffset;
-  converter.u = (uint32_t(bytes[0]) << 24) | (uint32_t(bytes[1]) << 16) |
-                (uint32_t(bytes[2]) << 8)  | uint32_t(bytes[3]);
+  uint8_t* demandBytes = payload + demandTotalOffset;
+  converter.u = (uint32_t(demandBytes[0]) << 24) | (uint32_t(demandBytes[1]) << 16) |
+                (uint32_t(demandBytes[2]) << 8)  | uint32_t(demandBytes[3]);
 
-  float originalDemand = converter.f * -1.0f;
-  float correctedDemand = originalDemand + correction;
-  converter.f = correctedDemand * -1.0f;
+  float originalDemand = converter.f;
+  float correctedDemand = originalDemand + correction;  // ADD wallbox power (back to addition)
+  converter.f = correctedDemand;
 
-  bytes[0] = (converter.u >> 24) & 0xFF;
-  bytes[1] = (converter.u >> 16) & 0xFF;
-  bytes[2] = (converter.u >> 8)  & 0xFF;
-  bytes[3] = converter.u         & 0xFF;
+  demandBytes[0] = (converter.u >> 24) & 0xFF;
+  demandBytes[1] = (converter.u >> 16) & 0xFF;
+  demandBytes[2] = (converter.u >> 8)  & 0xFF;
+  demandBytes[3] = converter.u         & 0xFF;
 
+  // 5. Recalculate CRC after all modifications
   uint16_t newCrc = ModbusRTU485::crc16(raw, len - 2);
   raw[len - 2] = newCrc & 0xFF;
   raw[len - 1] = (newCrc >> 8) & 0xFF;
@@ -371,10 +444,10 @@ bool parseDTSU666Response(const uint8_t* raw, uint16_t len, DTSU666Data& data) {
   data.voltage_L3L1 = parseFloat(40);
   data.frequency = parseFloat(44);
 
-  data.power_total = parseFloat(48) * -1.0f;
-  data.power_L1 = parseFloat(52) * -1.0f;
-  data.power_L2 = parseFloat(56) * -1.0f;
-  data.power_L3 = parseFloat(60) * -1.0f;
+  data.power_total = parseFloat(48);
+  data.power_L1 = parseFloat(52);
+  data.power_L2 = parseFloat(56);
+  data.power_L3 = parseFloat(60);
 
   return true;
 }
