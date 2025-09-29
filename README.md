@@ -66,10 +66,11 @@ Grid ←→ L&G Meter ←→ Wallbox ←→ DTSU-666 ←→ SUN2000 Inverter
    inline const char* evccApiUrl = "http://192.168.0.202:7070/api/state";
    ```
 
-3. **Build and upload**
+3. **Build and upload (first time)**
    ```bash
    cd Modbus_ProxyV1
-   pio run -t upload
+   # For serial upload (first time only)
+   pio run -e esp32-s3-serial -t upload
    ```
 
 4. **Monitor output**
@@ -82,7 +83,8 @@ Grid ←→ L&G Meter ←→ Wallbox ←→ DTSU-666 ←→ SUN2000 Inverter
 Once running, you can update remotely:
 
 ```bash
-pio run -t upload  # Uses Modbus-Proxy.local automatically
+# For OTA updates (after initial flash)
+pio run -e esp32-s3-ota -t upload
 ```
 
 ## 📊 Real-Time Output
@@ -117,7 +119,7 @@ const uint32_t HTTP_POLL_INTERVAL = 10000;
 The device advertises as `Modbus-Proxy` on your network:
 - **Hostname**: `Modbus-Proxy.local`
 - **OTA Password**: `modbus_ota_2023`
-- **MQTT Topics**: `MBUS-PROXY/DATA`, `MBUS-PROXY/ERROR`, `MBUS-PROXY/HEALTH`
+- **MQTT Topics**: `MBUS-PROXY/power`, `MBUS-PROXY/health`
 
 ### Hardware Pin Assignments
 
@@ -157,27 +159,35 @@ Modbus_ProxyV1/
 ### Building from Source
 
 ```bash
-# Build only
+# Build only (both environments)
 pio run
+
+# Build specific environment
+pio run -e esp32-s3-serial
+pio run -e esp32-s3-ota
 
 # Clean build
 pio run -t clean
-pio run
 
 # Upload via serial (first time)
-pio run -t upload --upload-port COM6
+pio run -e esp32-s3-serial -t upload
 
 # Upload via OTA (after initial flash)
-pio run -t upload
+pio run -e esp32-s3-ota -t upload
 ```
 
 ## 📈 Monitoring
 
 ### MQTT Topics
 
-- **`MBUS-PROXY/DATA`**: Corrected power data with timestamps
-- **`MBUS-PROXY/ERROR`**: Error events with context and error codes
-- **`MBUS-PROXY/HEALTH`**: System health status (every 30 seconds)
+- **`MBUS-PROXY/power`**: Essential power data (DTSU, wallbox, SUN2000, active status)
+  ```json
+  {"dtsu":-18.5,"wallbox":4140.0,"sun2000":4121.5,"active":true}
+  ```
+- **`MBUS-PROXY/health`**: System health status (every 60 seconds)
+  ```json
+  {"uptime":123456,"heap":54000,"mqtt_reconnects":2,"errors":0}
+  ```
 
 ### Health Monitoring
 
@@ -185,7 +195,8 @@ The system includes comprehensive health monitoring:
 - **Task Watchdog**: 60s timeout → auto-restart
 - **API Failures**: 20 consecutive failures → auto-restart
 - **Memory Protection**: <20KB free heap → auto-restart
-- **MQTT Errors**: Real-time error reporting
+- **MQTT Publishing**: Real-time power data (~1-2 seconds), health data (60 seconds)
+- **Optimized Payloads**: ~60-70 bytes for broker compatibility
 
 ### Serial Console Output
 
@@ -205,7 +216,7 @@ pio device monitor -b 115200
 2. **OTA Upload Fails**
    - Device must be on same network
    - Check hostname resolution: `ping Modbus-Proxy.local`
-   - Use IP address directly: `pio run -t upload --upload-port 192.168.0.XXX`
+   - Use IP address directly in `platformio.ini`: change `upload_port = Modbus-Proxy.local` to `upload_port = 192.168.0.XXX`
 
 3. **MODBUS Communication Issues**
    - Verify RS-485 wiring and termination
