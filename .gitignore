@@ -47,6 +47,7 @@ Thumbs.db
 *~
 
 # Credentials and sensitive data
+credentials.h
 credentials.h.bak
 *_backup.*
 *.secret
