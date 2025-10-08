@@ -1,282 +1,345 @@
-# ESP32-S3 MODBUS RTU Intelligent Proxy
+# 🔌 ESP32 MODBUS RTU Intelligent Proxy
 
-[![PlatformIO CI](https://img.shields.io/badge/PlatformIO-Compatible-orange.svg)](https://platformio.org/)
-[![ESP32-S3](https://img.shields.io/badge/ESP32--S3-Supported-blue.svg)](https://www.espressif.com/en/products/socs/esp32-s3)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![Platform: ESP32-C3](https://img.shields.io/badge/Platform-ESP32--C3-blue.svg)](https://github.com/SensorsIot/Modbus_Proxy/tree/main)
+[![Platform: ESP32-S3](https://img.shields.io/badge/Platform-ESP32--S3-green.svg)](https://github.com/SensorsIot/Modbus_Proxy/tree/S3)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![PlatformIO](https://img.shields.io/badge/PlatformIO-Ready-orange.svg)](https://platformio.org)
 
-A sophisticated power monitoring system that sits between a SUN2000 solar inverter and a DTSU-666 energy meter, providing real-time power correction by integrating wallbox charging data from an EVCC system. This was needed because the Wallbox is outside the Solar loop, but connected to our home. With this method, the Solar loop contains also the wallbox. So the inverter can optimize the entire consumption to 0 for the entire home.
+> **Intelligent power monitoring and correction system for solar installations with EV charging**
 
-## 🎯 Overview
+A sophisticated MODBUS RTU proxy that sits between a SUN2000 solar inverter and DTSU-666 energy meter, providing real-time power correction by integrating wallbox charging data from an EVCC system.
 
-The ESP32-S3 MODBUS RTU Intelligent Proxy ensures accurate power flow measurements by compensating for wallbox consumption between metering points. This allows the solar inverter to see household consumption **excluding** wallbox charging, enabling separate control of solar generation and EV charging.
+---
 
-### Key Features
+## 📋 Table of Contents
 
-- 🔄 **Transparent MODBUS Proxy**: Seamless bidirectional communication between SUN2000 and DTSU-666
-- ⚡ **Intelligent Power Correction**: Real-time wallbox power integration via EVCC API
-- 🌐 **Remote Management**: Arduino OTA updates via `Modbus-Proxy.local` hostname
-- 🏥 **Health Monitoring**: Comprehensive auto-restart and MQTT error reporting
-- 🧵 **Thread-Safe Architecture**: Dual-core FreeRTOS with mutex-protected data structures
-- 📊 **Clean Output**: Real-time 3-line status display with timing information
+- [Features](#-features)
+- [Hardware Platforms](#-hardware-platforms)
+- [Quick Start](#-quick-start)
+- [System Architecture](#-system-architecture)
+- [Configuration](#-configuration)
+- [MQTT Topics](#-mqtt-topics)
+- [Development](#-development)
+- [Documentation](#-documentation)
+- [License](#-license)
 
-## 🏗️ System Architecture
+---
 
+## ✨ Features
+
+- 🔄 **Transparent MODBUS Proxy**: Seamless communication between SUN2000 inverter and DTSU-666 meter
+- ⚡ **Intelligent Power Correction**: Real-time correction for wallbox charging (EVCC integration)
+- 📊 **MQTT Publishing**: Live power data and system health monitoring
+- 🛡️ **Watchdog Monitoring**: Automatic fault detection and recovery
+- 🔧 **Dual Platform Support**: ESP32-C3 (single-core) and ESP32-S3 (dual-core)
+- 📡 **OTA Updates**: Wireless firmware updates
+- 🐛 **Debug Options**: USB Serial and Telnet wireless debugging
+
+---
+
+## 🔧 Hardware Platforms
+
+### 📱 ESP32-C3 (Branch: `main`)
+![ESP32-C3](https://img.shields.io/badge/Core-Single--Core%20RISC--V-blue)
+![Speed](https://img.shields.io/badge/Speed-160MHz-blue)
+![RAM](https://img.shields.io/badge/RAM-320KB-blue)
+
+- **Board**: ESP32-C3-DevKitM-1
+- **Architecture**: Single-core RISC-V @ 160MHz
+- **UARTs**: 2 available (UART0/UART1 for RS485)
+- **LED**: GPIO 8 (inverted logic)
+- **Debug**: Telnet only (USB CDC disabled)
+
+**Pin Configuration**:
 ```
-Grid ←→ L&G Meter ←→ Wallbox ←→ DTSU-666 ←→ SUN2000 Inverter
-        (Reference)   (4.2kW)    (Proxy)      (Solar)
-                         ↑
-                      ESP32-S3
-                    (WiFi/HTTP/MQTT)
-                         ↓
-                     EVCC System
+SUN2000:  UART0 (RX=GPIO7,  TX=GPIO10)
+DTSU-666: UART1 (RX=GPIO1,  TX=GPIO0)
+LED:      GPIO8 (LOW=ON, HIGH=OFF)
 ```
 
-### Hardware Requirements
+### 🚀 ESP32-S3 (Branch: `S3`)
+![ESP32-S3](https://img.shields.io/badge/Core-Dual--Core%20Xtensa-green)
+![Speed](https://img.shields.io/badge/Speed-240MHz-green)
+![RAM](https://img.shields.io/badge/RAM-320KB-green)
 
-- **ESP32-S3** (I   use a Supermini board)
-- **Dual RS-485 Interfaces**:
-  - UART2 (RS485_SUN2000_TX_PIN, RS485_SUN2000_RX_PIN): SUN2000 inverter
-  - UART1 (RS485_DTU_TX_PIN, RS485_DTU_RX_PIN): DTSU-666 energy meter
-- **Status LED**: GPIO 48 (onboard LED)
-- **Power Supply**: 5V via USB-C or external supply
+- **Board**: Lolin S3 Mini
+- **Architecture**: Dual-core Xtensa @ 240MHz
+- **UARTs**: 3 available (UART0 for USB, UART1/UART2 for RS485)
+- **LED**: GPIO 48 (normal logic)
+- **Debug**: USB Serial or Telnet
+
+**Pin Configuration**:
+```
+SUN2000:  UART1 (RX=GPIO18, TX=GPIO17)
+DTSU-666: UART2 (RX=GPIO16, TX=GPIO15)
+LED:      GPIO48 (HIGH=ON, LOW=OFF)
+```
+
+**Core Distribution**:
+- **Core 0**: MQTT publishing, EVCC API polling, Watchdog
+- **Core 1**: MODBUS proxy with power correction (dedicated)
+
+---
 
 ## 🚀 Quick Start
 
 ### Prerequisites
 
-- [PlatformIO](https://platformio.org/) installed
-- ESP32-S3 development board
-- RS-485 transceivers (e.g., MAX485)
+- [PlatformIO](https://platformio.org/) installed (VSCode extension or CLI)
+- ESP32-C3 or ESP32-S3 development board
+- Two RS485 adapters
+- WiFi network access
 
 ### Installation
 
-1. **Clone the repository**
-   ```bash
-   git clone https://github.com/SensorsIot/Modbus_Proxy.git
-   cd Modbus_Proxy
-   git checkout S3
-   ```
-
-2. **Configure credentials**
-   ```cpp
-   // Edit Modbus_ProxyV1/src/credentials.h
-   inline const char* ssid = "your_wifi_network";
-   inline const char* password = "your_wifi_password";
-   inline const char* mqttServer = "192.168.0.203";
-   inline const char* evccApiUrl = "http://192.168.0.202:7070/api/state";
-   ```
-
-3. **Build and upload (first time)**
-   ```bash
-   cd Modbus_ProxyV1
-   # For serial upload (first time only)
-   pio run -e esp32-s3-serial -t upload
-   ```
-
-4. **Monitor output**
-   ```bash
-   pio device monitor
-   ```
-
-### OTA Updates (After Initial Flash)
-
-Once running, you can update remotely:
-
+1. **Clone the repository**:
 ```bash
-# For OTA updates (after initial flash)
-pio run -e esp32-s3-ota -t upload
+git clone https://github.com/SensorsIot/Modbus_Proxy.git
+cd Modbus_Proxy
 ```
 
-## 📊 Real-Time Output
+2. **Choose your platform**:
+```bash
+# For ESP32-C3 (main branch)
+git checkout main
 
-The system provides clean, immediate status output:
+# For ESP32-S3 (S3 branch)
+git checkout S3
+```
+
+3. **Configure credentials**:
+```bash
+cd Modbus_ProxyV1/src
+cp credentials.h.example credentials.h
+# Edit credentials.h with your WiFi and MQTT settings
+```
+
+4. **Build and upload**:
+```bash
+cd Modbus_ProxyV1
+
+# Serial upload (first time)
+pio run -e esp32-c3-serial --target upload    # For ESP32-C3
+pio run -e esp32-s3-serial --target upload    # For ESP32-S3
+
+# OTA upload (after initial flash)
+pio run -e esp32-c3-ota --target upload       # For ESP32-C3
+pio run -e esp32-s3-ota --target upload       # For ESP32-S3
+```
+
+5. **Monitor output**:
+```bash
+pio device monitor    # USB Serial
+telnet <IP_ADDRESS> 23  # Telnet (if enabled)
+```
+
+---
+
+## 🏗️ System Architecture
 
 ```
-DTSU: -1250.3W
-API:  4200W (valid)
-SUN2000: 2949.7W (DTSU -1250.3W + correction 4200W)
+┌─────────────┐     ┌──────────┐     ┌──────────┐     ┌─────────────┐
+│   Grid      │────▶│ Wallbox  │────▶│ DTSU-666 │────▶│  SUN2000    │
+│  (L&G)      │     │  (4.2kW) │     │  (Meter) │     │  Inverter   │
+└─────────────┘     └─────┬────┘     └────┬─────┘     └─────────────┘
+                          │                │
+                          │            ┌───▼────┐
+                          │            │ ESP32  │
+                          │            │ Proxy  │
+                          │            └───┬────┘
+                          │                │
+                          │          WiFi/MQTT
+                          │                │
+                    ┌─────▼────────────────▼─────┐
+                    │     EVCC System            │
+                    │  (EV Charging Controller)  │
+                    └────────────────────────────┘
 ```
 
-This shows:
-- **DTSU**: Raw meter reading (negative = importing power)
-- **API**: Wallbox charging power from EVCC API
-- **SUN2000**: Corrected value sent to inverter
+### Power Flow
+
+1. **DTSU-666** measures grid connection power
+2. **ESP32 Proxy** reads MODBUS data from DTSU-666
+3. **EVCC API** provides wallbox charging power
+4. **Power Correction** adds wallbox power to DTSU reading
+5. **SUN2000** receives corrected power values
+
+---
 
 ## ⚙️ Configuration
 
-### Power Correction Settings
+### credentials.h
 
 ```cpp
-// Power correction only applies if |wallboxPower| > 1000W
-const float CORRECTION_THRESHOLD = 1000.0f;
-
-// EVCC API polling interval (10 seconds)
-const uint32_t HTTP_POLL_INTERVAL = 10000;
+static const char* ssid = "YOUR_WIFI_SSID";
+static const char* password = "YOUR_WIFI_PASSWORD";
+static const char* mqttServer = "192.168.0.203";
+static const char* evccApiUrl = "http://192.168.0.202:7070/api/state";
 ```
 
-### Network Configuration
+### config.h (Platform-Specific)
 
-The device advertises as `Modbus-Proxy` on your network:
-- **Hostname**: `Modbus-Proxy.local`
-- **OTA Password**: `modbus_ota_2023`
-- **MQTT Topics**: `MBUS-PROXY/power`, `MBUS-PROXY/health`
-
-### Hardware Pin Assignments
-
+**Debug Settings**:
 ```cpp
-// ESP32-S3 GPIO Configuration
-#define RS485_SUN2000_RX_PIN 4     // SUN2000 inverter (UART2)
-#define RS485_SUN2000_TX_PIN 3
-#define RS485_DTU_RX_PIN 13        // DTSU-666 meter (UART1)
-#define RS485_DTU_TX_PIN 12
-#define STATUS_LED_PIN 48          // Onboard LED activity indicator
+#define ENABLE_SERIAL_DEBUG true   // USB serial (ESP32-S3)
+#define ENABLE_TELNET_DEBUG false  // Wireless telnet
 ```
 
-## 🔧 Development
+**Key Parameters**:
+- `CORRECTION_THRESHOLD`: 1000W (minimum wallbox power for correction)
+- `HTTP_POLL_INTERVAL`: 10000ms (EVCC API polling)
+- `WATCHDOG_TIMEOUT_MS`: 60000ms (task heartbeat timeout)
 
-### Project Structure
+---
 
+## 📡 MQTT Topics
+
+### MBUS-PROXY/power
+Published every MODBUS transaction (~1/second)
+
+```json
+{
+  "dtsu": 94.1,        // DTSU-666 reading (W)
+  "wallbox": 1840.0,   // Wallbox power (W)
+  "sun2000": 1934.1,   // Corrected value to SUN2000 (W)
+  "active": true       // Correction applied
+}
 ```
-Modbus_ProxyV1/
-├── src/
-│   ├── main.cpp              # Main program entry point
-│   ├── modbus_proxy.cpp      # Core MODBUS proxy logic
-│   ├── evcc_api.cpp          # EVCC HTTP API integration
-│   ├── mqtt_handler.cpp      # MQTT communication
-│   ├── dtsu666.cpp           # DTSU-666 data parsing
-│   ├── config.h              # Hardware configuration
-│   └── credentials.h         # Network credentials
-├── platformio.ini            # PlatformIO configuration
-└── Modbus-Proxy-FSD.md       # Functional specification
+
+### MBUS-PROXY/health
+Published every 60 seconds
+
+```json
+{
+  "timestamp": 123456,
+  "uptime": 123456,
+  "free_heap": 250000,
+  "min_free_heap": 200000,
+  "mqtt_reconnects": 0,
+  "dtsu_updates": 1234,
+  "evcc_updates": 123,
+  "evcc_errors": 0,
+  "proxy_errors": 0,
+  "power_correction": 1840.0,
+  "correction_active": true
+}
 ```
 
-### Task Architecture
+---
 
-- **Core 0**: MQTT Task (Priority 1) + Watchdog Task (Priority 3)
-- **Core 1**: Proxy Task (Priority 2)
-- **Memory**: 16KB MQTT stack, 8KB JSON buffer, mutex-protected shared data
+## 🛠️ Development
 
-### Building from Source
+### Building
 
 ```bash
-# Build only (both environments)
-pio run
+cd Modbus_ProxyV1
 
-# Build specific environment
-pio run -e esp32-s3-serial
-pio run -e esp32-s3-ota
+# Build only (no upload)
+pio run -e esp32-c3-serial   # ESP32-C3
+pio run -e esp32-s3-serial   # ESP32-S3
 
 # Clean build
-pio run -t clean
-
-# Upload via serial (first time)
-pio run -e esp32-s3-serial -t upload
-
-# Upload via OTA (after initial flash)
-pio run -e esp32-s3-ota -t upload
+pio run --target clean
 ```
 
-## 📈 Monitoring
+### Debugging
 
-### MQTT Topics
-
-- **`MBUS-PROXY/power`**: Essential power data (DTSU, wallbox, SUN2000, active status)
-  ```json
-  {"dtsu":-18.5,"wallbox":4140.0,"sun2000":4121.5,"active":true}
-  ```
-- **`MBUS-PROXY/health`**: System health status (every 60 seconds)
-  ```json
-  {"uptime":123456,"heap":54000,"mqtt_reconnects":2,"errors":0}
-  ```
-
-### Health Monitoring
-
-The system includes comprehensive health monitoring:
-- **Task Watchdog**: 60s timeout → auto-restart
-- **API Failures**: 20 consecutive failures → auto-restart
-- **Memory Protection**: <20KB free heap → auto-restart
-- **MQTT Publishing**: Real-time power data (~1-2 seconds), health data (60 seconds)
-- **Optimized Payloads**: ~60-70 bytes for broker compatibility
-
-### Serial Console Output
-
-Connect to see real-time system status:
+**USB Serial** (ESP32-S3 only):
 ```bash
 pio device monitor -b 115200
 ```
 
-## 🛠️ Troubleshooting
-
-### Common Issues
-
-1. **Compilation Errors**
-   - Ensure PlatformIO is updated: `pio upgrade`
-   - Check ESP32-S3 platform: `pio platform install espressif32`
-
-2. **OTA Upload Fails**
-   - Device must be on same network
-   - Check hostname resolution: `ping Modbus-Proxy.local`
-   - Use IP address directly in `platformio.ini`: change `upload_port = Modbus-Proxy.local` to `upload_port = 192.168.0.XXX`
-
-3. **MODBUS Communication Issues**
-   - Verify RS-485 wiring and termination
-   - Check baud rate (9600 8N1)
-   - Ensure proper ground connections
-
-4. **Stack Overflow Crashes**
-   - Already resolved with 16KB MQTT task stack
-   - Monitor heap usage via serial output
-
-### Debug Mode
-
-Enable detailed logging by modifying debug flags in `platformio.ini`:
-```ini
-build_flags =
-    -DDEBUG_MODBUS=1
-    -DDEBUG_HTTP=1
+**Telnet** (both platforms):
+```bash
+telnet <DEVICE_IP> 23
 ```
 
-## 📚 Documentation
+### OTA Password
 
-- **[Functional Specification](Modbus_ProxyV1/Modbus-Proxy-FSD.md)**: Complete technical specification
-- **[PlatformIO Docs](https://docs.platformio.org/)**: Build system documentation
-- **[ESP32-S3 Reference](https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/)**: Hardware documentation
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/amazing-feature`
-3. Commit changes: `git commit -m 'Add amazing feature'`
-4. Push to branch: `git push origin feature/amazing-feature`
-5. Open a Pull Request
-
-### Development Guidelines
-
-- Follow existing code style and conventions
-- Add comprehensive error handling
-- Include mutex protection for shared data
-- Test thoroughly on actual hardware
-- Update documentation as needed
-
-## 📄 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## 🙏 Acknowledgments
-
-- **Andreas Spiess** - Original concept and hardware integration
-- **Claude Code** - Code architecture and ESP32-S3 migration
-- **PlatformIO** - Excellent build system for embedded development
-- **Espressif** - ESP32-S3 microcontroller platform
-
-## 📞 Support
-
-- **Issues**: [GitHub Issues](https://github.com/SensorsIot/Modbus_Proxy/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/SensorsIot/Modbus_Proxy/discussions)
-- **Documentation**: [Functional Specification](Modbus_ProxyV1/Modbus-Proxy-FSD.md)
+Default OTA password: `modbus_ota_2023`
 
 ---
 
-**Made with ❤️ for the solar energy community**
+## 📚 Documentation
 
-*This project enables smarter solar energy management by providing accurate power measurements that exclude EV charging, allowing for optimal solar generation control and independent wallbox charging management.*
+- **[Modbus-Proxy-FSD.md](Modbus_ProxyV1/Modbus-Proxy-FSD.md)**: Complete Functional Specification Document (v3.0)
+
+---
+
+## 🔬 Technical Details
+
+### MODBUS Configuration
+- **Baud Rate**: 9600, 8N1
+- **Slave ID**: 11 (DTSU-666)
+- **Function Codes**: 0x03, 0x04
+- **Register Range**: 2102-2181 (80 registers, IEEE 754 floats)
+
+### Memory Usage
+
+| Platform | RAM | Flash |
+|----------|-----|-------|
+| ESP32-C3 | 14.8% (48KB) | 74.5% (977KB) |
+| ESP32-S3 | 16.5% (54KB) | 72.3% (947KB) |
+
+### Task Priorities
+
+| Task | Priority | Stack |
+|------|----------|-------|
+| Watchdog | 3 (highest) | 2KB |
+| Proxy | 2 | 4KB |
+| MQTT | 1 (lowest) | 16KB |
+
+---
+
+## 🤝 Contributing
+
+Contributions welcome! Please read the FSD document first to understand the system architecture.
+
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+---
+
+## 📝 License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+---
+
+## 👨‍💻 Author
+
+**Andreas Spiess** / Claude Code
+
+- YouTube: [@AndreasSpiess](https://www.youtube.com/AndreasSpiess)
+- GitHub: [@SensorsIot](https://github.com/SensorsIot)
+
+---
+
+## 🙏 Acknowledgments
+
+- ESP32 Arduino Core team
+- PlatformIO team
+- EVCC project
+- MODBUS community
+
+---
+
+## 📞 Support
+
+- 📺 YouTube videos on Andreas Spiess channel
+- 🐛 [GitHub Issues](https://github.com/SensorsIot/Modbus_Proxy/issues)
+- 💬 Community discussions
+
+---
+
+<div align="center">
+
+**Made with ❤️ for the solar and EV charging community**
+
+[![YouTube](https://img.shields.io/badge/YouTube-Andreas%20Spiess-red?style=for-the-badge&logo=youtube)](https://www.youtube.com/AndreasSpiess)
+[![GitHub](https://img.shields.io/badge/GitHub-SensorsIot-black?style=for-the-badge&logo=github)](https://github.com/SensorsIot)
+
+</div>
