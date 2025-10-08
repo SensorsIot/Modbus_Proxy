@@ -1,18 +1,18 @@
 #pragma once
 
-// Debug settings - USB Serial debugging for ESP32-S3
-#define ENABLE_SERIAL_DEBUG true
+// Debug settings - Telnet wireless debugging for ESP32-C3
+#define ENABLE_SERIAL_DEBUG false
 #define ENABLE_TELNET_DEBUG false
 
-// ESP32-S3 Pin definitions - Using UART1 and UART2 for RS485
-#define RS485_SUN2000_RX_PIN 18
-#define RS485_SUN2000_TX_PIN 17
-#define RS485_DTU_RX_PIN 16
-#define RS485_DTU_TX_PIN 15
+// ESP32-C3 Pin definitions - safe GPIOs for UART
+#define RS485_SUN2000_RX_PIN 7
+#define RS485_SUN2000_TX_PIN 10
+#define RS485_DTU_RX_PIN 1
+#define RS485_DTU_TX_PIN 0
 
-// Status LED pin (GPIO48 on Lolin S3 Mini - normal logic)
-#define STATUS_LED_PIN 48
-#define LED_INVERTED false
+// Status LED pin (GPIO8, inverted logic - LOW=ON, HIGH=OFF)
+#define STATUS_LED_PIN 8
+#define LED_INVERTED true
 
 // LED control macros (handles inverted logic)
 #if LED_INVERTED
