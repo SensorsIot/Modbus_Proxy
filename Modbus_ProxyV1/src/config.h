@@ -1,16 +1,27 @@
 #pragma once
 
-// Debug settings
-#define ENABLE_SERIAL_DEBUG true
+// Debug settings - Telnet wireless debugging for ESP32-C3
+#define ENABLE_SERIAL_DEBUG false
+#define ENABLE_TELNET_DEBUG false
 
-// ESP32-S3 Pin definitions (GPIO 1/4 and 12/13)
+// ESP32-C3 Pin definitions - safe GPIOs for UART
 #define RS485_SUN2000_RX_PIN 7
-#define RS485_SUN2000_TX_PIN 6
-#define RS485_DTU_RX_PIN 13
-#define RS485_DTU_TX_PIN 12
+#define RS485_SUN2000_TX_PIN 10
+#define RS485_DTU_RX_PIN 1
+#define RS485_DTU_TX_PIN 0
 
-// Status LED pin (GPIO48 is the onboard LED)
-#define STATUS_LED_PIN 48
+// Status LED pin (GPIO8, inverted logic - LOW=ON, HIGH=OFF)
+#define STATUS_LED_PIN 8
+#define LED_INVERTED true
+
+// LED control macros (handles inverted logic)
+#if LED_INVERTED
+  #define LED_ON()  digitalWrite(STATUS_LED_PIN, LOW)
+  #define LED_OFF() digitalWrite(STATUS_LED_PIN, HIGH)
+#else
+  #define LED_ON()  digitalWrite(STATUS_LED_PIN, HIGH)
+  #define LED_OFF() digitalWrite(STATUS_LED_PIN, LOW)
+#endif
 
 // MODBUS communication settings
 #define MODBUS_BAUDRATE 9600

@@ -1,13 +1,11 @@
 #include "modbus_proxy.h"
 #include "debug.h"
-#include <Adafruit_NeoPixel.h>
-
-// External NeoPixel reference
-extern Adafruit_NeoPixel pixel;
 
 // Serial interfaces
-HardwareSerial SerialSUN(2);
-HardwareSerial SerialDTU(1);
+// ESP32-C3 only has UART0 and UART1 (UART0 for debug, UART1 for RS485)
+// We'll use UART0 for SUN2000 and UART1 for DTU
+HardwareSerial SerialSUN(0);   // UART0 for SUN2000
+HardwareSerial SerialDTU(1);   // UART1 for DTU
 
 // ModbusRTU485 instances
 ModbusRTU485 modbusSUN;
@@ -82,17 +80,37 @@ void proxyTask(void *pvParameters) {
   ModbusMessage sunMsg;
   uint32_t proxyCount = 0;
 
+  DEBUG_PRINTLN("\n🔍 MODBUS PROXY DEBUG MODE ACTIVE");
+  DEBUG_PRINTF("   SUN2000 interface: RX=GPIO%d, TX=GPIO%d\n", RS485_SUN2000_RX_PIN, RS485_SUN2000_TX_PIN);
+  DEBUG_PRINTF("   DTU interface: RX=GPIO%d, TX=GPIO%d\n", RS485_DTU_RX_PIN, RS485_DTU_TX_PIN);
+  DEBUG_PRINTLN("   Waiting for MODBUS traffic...\n");
+
+  uint32_t lastDebugTime = 0;
+  uint32_t noTrafficCount = 0;
+
   while (true) {
     updateTaskHealthbeat(true);
 
+    // Periodic status report every 10 seconds
+    if (millis() - lastDebugTime > 10000) {
+      DEBUG_PRINTF("⏱️  No MODBUS traffic for %lu seconds (waiting on SUN2000 RX=GPIO%d)\n",
+                   noTrafficCount * 10, RS485_SUN2000_RX_PIN);
+      lastDebugTime = millis();
+      noTrafficCount++;
+    }
+
     if (modbusSUN.read(sunMsg, 2000)) {
-      // Flash white to indicate SUN2000 interface activity
-      pixel.setPixelColor(0, pixel.Color(50, 50, 50));
-      pixel.show();
+      // Reset no-traffic counter
+      noTrafficCount = 0;
+      lastDebugTime = millis();
+
+      // Flash LED to indicate SUN2000 interface activity
+      LED_ON();
 
       proxyCount++;
       uint32_t proxyStart = millis();
 
+      // Only process and debug DTSU (ID=11) messages
       if (sunMsg.id == 11 && sunMsg.type == MBType::Request) {
         uint32_t dtsuStart = millis();
         size_t written = SerialDTU.write(sunMsg.raw, sunMsg.len);
@@ -111,11 +129,6 @@ void proxyTask(void *pvParameters) {
               DTSU666Data dtsuData;
               if (parseDTSU666Response(dtsuMsg.raw, dtsuMsg.len, dtsuData)) {
                 dtsu666Data = dtsuData;
-
-                // Debug: DTSU received values
-                DEBUG_PRINTF("📥 DTSU->Proxy: P_tot=%.1fW P_L1=%.1fW P_L2=%.1fW P_L3=%.1fW I_L1=%.2fA I_L2=%.2fA I_L3=%.2fA\n",
-                              dtsuData.power_total, dtsuData.power_L1, dtsuData.power_L2, dtsuData.power_L3,
-                              dtsuData.current_L1, dtsuData.current_L2, dtsuData.current_L3);
                 calculatePowerCorrection();
 
                 DTSU666Data finalData = dtsuData;
@@ -154,27 +167,21 @@ void proxyTask(void *pvParameters) {
                   sun2000Value = finalData.power_total;
                 }
 
-                DEBUG_PRINTF("DTSU: %.1fW\n", dtsuData.power_total);
-                DEBUG_PRINTF("API:  %.1fW (%s)\n", currentWallboxPower, valid ? "valid" : "stale");
-                DEBUG_PRINTF("SUN2000: %.1fW (DTSU %.1fW + correction %.1fW)\n",
-                            sun2000Value, dtsuData.power_total,
-                            correctionAppliedSuccessfully ? powerCorrection : 0.0f);
+                // Single line debug output with all three values
+                DEBUG_PRINTF("DTSU: %.1fW | Wallbox: %.1fW | SUN2000: %.1fW (%.1fW %c %.1fW)\n",
+                            dtsuData.power_total,
+                            currentWallboxPower,
+                            sun2000Value,
+                            dtsuData.power_total,
+                            correctionAppliedSuccessfully && powerCorrection >= 0 ? '+' : '-',
+                            fabs(correctionAppliedSuccessfully ? powerCorrection : 0.0f));
 
                 updateSharedData(dtsuMsg.raw, dtsuMsg.len, finalData);
                 systemHealth.dtsuUpdates++;
               }
             }
 
-            uint32_t sunReplyStart = millis();
-
-            // Debug: Parse final data being sent to SUN2000
-            DTSU666Data finalSentData;
-            if (parseDTSU666Response(dtsuMsg.raw, dtsuMsg.len, finalSentData)) {
-              DEBUG_PRINTF("📤 Proxy->SUN2000: P_tot=%.1fW P_L1=%.1fW P_L2=%.1fW P_L3=%.1fW I_L1=%.2fA I_L2=%.2fA I_L3=%.2fA\n",
-                            finalSentData.power_total, finalSentData.power_L1, finalSentData.power_L2, finalSentData.power_L3,
-                            finalSentData.current_L1, finalSentData.current_L2, finalSentData.current_L3);
-            }
-
+            // Send response to SUN2000
             size_t sunWritten = SerialSUN.write(dtsuMsg.raw, dtsuMsg.len);
             SerialSUN.flush();
 
@@ -184,21 +191,19 @@ void proxyTask(void *pvParameters) {
               reportSystemError("MODBUS", "SUN2000 write failed", sunWritten);
             }
           } else {
-            DEBUG_PRINTLN("   ❌ No reply from DTSU (timeout)");
+            DEBUG_PRINTLN("❌ DTSU TIMEOUT");
             systemHealth.proxyErrors++;
             reportSystemError("MODBUS", "DTSU timeout", 0);
           }
         } else {
-          DEBUG_PRINTF("   ❌ Failed to write to DTSU: %u/%u bytes\n", written, sunMsg.len);
+          DEBUG_PRINTLN("❌ DTSU WRITE FAILED");
           systemHealth.proxyErrors++;
           reportSystemError("MODBUS", "DTSU write failed", written);
         }
-        DEBUG_PRINTLN();
       }
 
-      // Turn off NeoPixel after SUN2000 transaction completes
-      pixel.setPixelColor(0, pixel.Color(0, 0, 0));
-      pixel.show();
+      // Turn off LED after SUN2000 transaction completes
+      LED_OFF();
     }
 
     vTaskDelay(10 / portTICK_PERIOD_MS);

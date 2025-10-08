@@ -3,10 +3,6 @@
 #include "debug.h"
 #include "evcc_api.h"
 #include "modbus_proxy.h"
-#include <Adafruit_NeoPixel.h>
-
-// External NeoPixel reference
-extern Adafruit_NeoPixel pixel;
 
 // Global MQTT objects
 WiFiClient wifiClient;
@@ -58,23 +54,15 @@ bool connectToMQTT() {
   mqttReconnectCount++;
   systemHealth.mqttReconnects = mqttReconnectCount;
 
-  // Phase 3: MQTT connection - Blink red during attempt
-  pixel.setPixelColor(0, pixel.Color(255, 0, 0));
-  pixel.show();
-
   DEBUG_PRINTF("🔌 MQTT reconnection attempt #%lu...", mqttReconnectCount);
 
   String clientId = "MBUS_PROXY_" + WiFi.macAddress();
   clientId.replace(":", "");
   if (mqttClient.connect(clientId.c_str(), NULL, NULL, NULL, 0, false, NULL, true)) {
     DEBUG_PRINTLN(" ✅ CONNECTED!");
-    pixel.setPixelColor(0, pixel.Color(0, 0, 0));
-    pixel.show();
     return true;
   } else {
     DEBUG_PRINTF(" ❌ FAILED (state=%d)\n", mqttClient.state());
-    pixel.setPixelColor(0, pixel.Color(0, 0, 0));
-    pixel.show();
     return false;
   }
 }
@@ -272,7 +260,10 @@ void processMQTTQueue() {
       doc["active"] = item.correctionApplied;
 
       bool success = mqttPublishJSON(MQTT_TOPIC_POWER, doc);
-      DEBUG_PRINTF("📤 MQTT publish %s (state=%d)\n", success ? "OK" : "FAILED", mqttClient.state());
+      // Only report MQTT failures, not successes
+      if (!success) {
+        DEBUG_PRINTF("❌ MQTT publish FAILED (state=%d)\n", mqttClient.state());
+      }
     } else {
       DEBUG_PRINTLN("⚠️ MQTT not connected, dropping queued data");
     }
