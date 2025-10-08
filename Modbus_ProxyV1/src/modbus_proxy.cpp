@@ -2,10 +2,9 @@
 #include "debug.h"
 
 // Serial interfaces
-// ESP32-C3 only has UART0 and UART1 (UART0 for debug, UART1 for RS485)
-// We'll use UART0 for SUN2000 and UART1 for DTU
-HardwareSerial SerialSUN(0);   // UART0 for SUN2000
-HardwareSerial SerialDTU(1);   // UART1 for DTU
+// ESP32-S3 has 3 UARTs - using UART1 and UART2 for RS485
+HardwareSerial SerialSUN(1);   // UART1 for SUN2000
+HardwareSerial SerialDTU(2);   // UART2 for DTU
 
 // ModbusRTU485 instances
 ModbusRTU485 modbusSUN;
@@ -57,11 +56,11 @@ bool initSerialInterfaces() {
   DEBUG_PRINTLN("🔧 Initializing RS485 interfaces...");
 
   SerialSUN.begin(MODBUS_BAUDRATE, SERIAL_8N1, RS485_SUN2000_RX_PIN, RS485_SUN2000_TX_PIN);
-  DEBUG_PRINTF("   ✅ SUN2000 interface: UART2, %d baud, pins %d(RX)/%d(TX)\n",
+  DEBUG_PRINTF("   ✅ SUN2000 interface: UART1, %d baud, pins %d(RX)/%d(TX)\n",
                 MODBUS_BAUDRATE, RS485_SUN2000_RX_PIN, RS485_SUN2000_TX_PIN);
 
   SerialDTU.begin(MODBUS_BAUDRATE, SERIAL_8N1, RS485_DTU_RX_PIN, RS485_DTU_TX_PIN);
-  DEBUG_PRINTF("   ✅ DTSU-666 interface: UART1, %d baud, pins %d(RX)/%d(TX)\n",
+  DEBUG_PRINTF("   ✅ DTSU-666 interface: UART2, %d baud, pins %d(RX)/%d(TX)\n",
                 MODBUS_BAUDRATE, RS485_DTU_RX_PIN, RS485_DTU_TX_PIN);
 
   modbusSUN.begin(SerialSUN, MODBUS_BAUDRATE);

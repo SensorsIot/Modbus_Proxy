@@ -31,8 +31,9 @@
           if (client) client.stop();
           client = server->available();
           client.setNoDelay(true);
-          client.println("\n=== ESP32-C3 MODBUS Proxy Debug ===");
-          client.println("Connected to telnet debug port\n");
+          client.println("\n=== ESP32-S3 MODBUS Proxy Debug ===");
+          client.println("Telnet debug session started");
+          client.println("Type 'help' for commands (not implemented yet)\n");
         }
       }
     }
