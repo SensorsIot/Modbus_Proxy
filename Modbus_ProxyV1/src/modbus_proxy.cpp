@@ -1,4 +1,9 @@
 #include "modbus_proxy.h"
+#include "debug.h"
+#include <Adafruit_NeoPixel.h>
+
+// External NeoPixel reference
+extern Adafruit_NeoPixel pixel;
 
 // Serial interfaces
 HardwareSerial SerialSUN(2);
@@ -31,19 +36,19 @@ bool initModbusProxy() {
   mqttTaskHealthMutex = xSemaphoreCreateMutex();
 
   if (!proxyTaskHealthMutex || !mqttTaskHealthMutex) {
-    Serial.println("❌ Failed to create health monitoring mutexes");
+    DEBUG_PRINTLN("❌ Failed to create health monitoring mutexes");
     return false;
   }
 
   sharedDTSU.mutex = xSemaphoreCreateMutex();
   if (!sharedDTSU.mutex) {
-    Serial.println("❌ Failed to create DTSU data mutex");
+    DEBUG_PRINTLN("❌ Failed to create DTSU data mutex");
     return false;
   }
 
   sharedEVCC.mutex = xSemaphoreCreateMutex();
   if (!sharedEVCC.mutex) {
-    Serial.println("❌ Failed to create EVCC data mutex");
+    DEBUG_PRINTLN("❌ Failed to create EVCC data mutex");
     return false;
   }
 
@@ -51,28 +56,28 @@ bool initModbusProxy() {
 }
 
 bool initSerialInterfaces() {
-  Serial.println("🔧 Initializing RS485 interfaces...");
+  DEBUG_PRINTLN("🔧 Initializing RS485 interfaces...");
 
   SerialSUN.begin(MODBUS_BAUDRATE, SERIAL_8N1, RS485_SUN2000_RX_PIN, RS485_SUN2000_TX_PIN);
-  Serial.printf("   ✅ SUN2000 interface: UART2, %d baud, pins %d(RX)/%d(TX)\n",
+  DEBUG_PRINTF("   ✅ SUN2000 interface: UART2, %d baud, pins %d(RX)/%d(TX)\n",
                 MODBUS_BAUDRATE, RS485_SUN2000_RX_PIN, RS485_SUN2000_TX_PIN);
 
   SerialDTU.begin(MODBUS_BAUDRATE, SERIAL_8N1, RS485_DTU_RX_PIN, RS485_DTU_TX_PIN);
-  Serial.printf("   ✅ DTSU-666 interface: UART1, %d baud, pins %d(RX)/%d(TX)\n",
+  DEBUG_PRINTF("   ✅ DTSU-666 interface: UART1, %d baud, pins %d(RX)/%d(TX)\n",
                 MODBUS_BAUDRATE, RS485_DTU_RX_PIN, RS485_DTU_TX_PIN);
 
   modbusSUN.begin(SerialSUN, MODBUS_BAUDRATE);
-  Serial.println("   ✅ SUN2000 MODBUS handler initialized");
+  DEBUG_PRINTLN("   ✅ SUN2000 MODBUS handler initialized");
 
   modbusDTU.begin(SerialDTU, MODBUS_BAUDRATE);
-  Serial.println("   ✅ DTSU-666 MODBUS handler initialized");
+  DEBUG_PRINTLN("   ✅ DTSU-666 MODBUS handler initialized");
 
   return true;
 }
 
 
 void proxyTask(void *pvParameters) {
-  Serial.println("🐌 Simple Proxy Task started - Direct SUN2000 ↔ DTSU proxying");
+  DEBUG_PRINTLN("🐌 Simple Proxy Task started - Direct SUN2000 ↔ DTSU proxying");
 
   ModbusMessage sunMsg;
   uint32_t proxyCount = 0;
@@ -81,8 +86,9 @@ void proxyTask(void *pvParameters) {
     updateTaskHealthbeat(true);
 
     if (modbusSUN.read(sunMsg, 2000)) {
-      // Blink LED to indicate SUN2000 interface activity
-      digitalWrite(STATUS_LED_PIN, HIGH);
+      // Flash white to indicate SUN2000 interface activity
+      pixel.setPixelColor(0, pixel.Color(50, 50, 50));
+      pixel.show();
 
       proxyCount++;
       uint32_t proxyStart = millis();
@@ -98,7 +104,7 @@ void proxyTask(void *pvParameters) {
             uint32_t dtsuTime = millis() - dtsuStart;
 
             if (dtsuMsg.type == MBType::Exception) {
-              Serial.printf("   ❌ DTSU EXCEPTION: Code=0x%02X\n", dtsuMsg.exCode);
+              DEBUG_PRINTF("   ❌ DTSU EXCEPTION: Code=0x%02X\n", dtsuMsg.exCode);
               systemHealth.proxyErrors++;
               reportSystemError("MODBUS", "DTSU exception", dtsuMsg.exCode);
             } else if (dtsuMsg.fc == 0x03 && dtsuMsg.len >= 165) {
@@ -107,7 +113,7 @@ void proxyTask(void *pvParameters) {
                 dtsu666Data = dtsuData;
 
                 // Debug: DTSU received values
-                Serial.printf("📥 DTSU->Proxy: P_tot=%.1fW P_L1=%.1fW P_L2=%.1fW P_L3=%.1fW I_L1=%.2fA I_L2=%.2fA I_L3=%.2fA\n",
+                DEBUG_PRINTF("📥 DTSU->Proxy: P_tot=%.1fW P_L1=%.1fW P_L2=%.1fW P_L3=%.1fW I_L1=%.2fA I_L2=%.2fA I_L3=%.2fA\n",
                               dtsuData.power_total, dtsuData.power_L1, dtsuData.power_L2, dtsuData.power_L3,
                               dtsuData.current_L1, dtsuData.current_L2, dtsuData.current_L3);
                 calculatePowerCorrection();
@@ -148,9 +154,9 @@ void proxyTask(void *pvParameters) {
                   sun2000Value = finalData.power_total;
                 }
 
-                Serial.printf("DTSU: %.1fW\n", dtsuData.power_total);
-                Serial.printf("API:  %.1fW (%s)\n", currentWallboxPower, valid ? "valid" : "stale");
-                Serial.printf("SUN2000: %.1fW (DTSU %.1fW + correction %.1fW)\n",
+                DEBUG_PRINTF("DTSU: %.1fW\n", dtsuData.power_total);
+                DEBUG_PRINTF("API:  %.1fW (%s)\n", currentWallboxPower, valid ? "valid" : "stale");
+                DEBUG_PRINTF("SUN2000: %.1fW (DTSU %.1fW + correction %.1fW)\n",
                             sun2000Value, dtsuData.power_total,
                             correctionAppliedSuccessfully ? powerCorrection : 0.0f);
 
@@ -164,7 +170,7 @@ void proxyTask(void *pvParameters) {
             // Debug: Parse final data being sent to SUN2000
             DTSU666Data finalSentData;
             if (parseDTSU666Response(dtsuMsg.raw, dtsuMsg.len, finalSentData)) {
-              Serial.printf("📤 Proxy->SUN2000: P_tot=%.1fW P_L1=%.1fW P_L2=%.1fW P_L3=%.1fW I_L1=%.2fA I_L2=%.2fA I_L3=%.2fA\n",
+              DEBUG_PRINTF("📤 Proxy->SUN2000: P_tot=%.1fW P_L1=%.1fW P_L2=%.1fW P_L3=%.1fW I_L1=%.2fA I_L2=%.2fA I_L3=%.2fA\n",
                             finalSentData.power_total, finalSentData.power_L1, finalSentData.power_L2, finalSentData.power_L3,
                             finalSentData.current_L1, finalSentData.current_L2, finalSentData.current_L3);
             }
@@ -173,25 +179,26 @@ void proxyTask(void *pvParameters) {
             SerialSUN.flush();
 
             if (sunWritten != dtsuMsg.len) {
-              Serial.printf("   ❌ Failed to write to SUN2000: %u/%u bytes\n", sunWritten, dtsuMsg.len);
+              DEBUG_PRINTF("   ❌ Failed to write to SUN2000: %u/%u bytes\n", sunWritten, dtsuMsg.len);
               systemHealth.proxyErrors++;
               reportSystemError("MODBUS", "SUN2000 write failed", sunWritten);
             }
           } else {
-            Serial.println("   ❌ No reply from DTSU (timeout)");
+            DEBUG_PRINTLN("   ❌ No reply from DTSU (timeout)");
             systemHealth.proxyErrors++;
             reportSystemError("MODBUS", "DTSU timeout", 0);
           }
         } else {
-          Serial.printf("   ❌ Failed to write to DTSU: %u/%u bytes\n", written, sunMsg.len);
+          DEBUG_PRINTF("   ❌ Failed to write to DTSU: %u/%u bytes\n", written, sunMsg.len);
           systemHealth.proxyErrors++;
           reportSystemError("MODBUS", "DTSU write failed", written);
         }
-        Serial.println();
+        DEBUG_PRINTLN();
       }
 
-      // Turn off LED after SUN2000 transaction completes
-      digitalWrite(STATUS_LED_PIN, LOW);
+      // Turn off NeoPixel after SUN2000 transaction completes
+      pixel.setPixelColor(0, pixel.Color(0, 0, 0));
+      pixel.show();
     }
 
     vTaskDelay(10 / portTICK_PERIOD_MS);
@@ -218,8 +225,8 @@ void calculatePowerCorrection() {
     systemHealth.powerCorrectionActive = true;
   } else {
     if (powerCorrectionActive) {
-      Serial.printf("\n⚡ POWER CORRECTION DEACTIVATED:\n");
-      Serial.printf("   No significant wallbox charging detected\n");
+      DEBUG_PRINTF("\n⚡ POWER CORRECTION DEACTIVATED:\n");
+      DEBUG_PRINTF("   No significant wallbox charging detected\n");
     }
 
     powerCorrection = 0.0f;
@@ -257,13 +264,13 @@ void performHealthCheck() {
   uint32_t currentTime = millis();
 
   if (currentTime - proxyTaskLastSeen > WATCHDOG_TIMEOUT_MS) {
-    Serial.printf("🚨 PROXY TASK TIMEOUT: %lu ms since last heartbeat\n",
+    DEBUG_PRINTF("🚨 PROXY TASK TIMEOUT: %lu ms since last heartbeat\n",
                   currentTime - proxyTaskLastSeen);
     reportSystemError("WATCHDOG", "Proxy task timeout", currentTime - proxyTaskLastSeen);
   }
 
   if (currentTime - mqttTaskLastSeen > WATCHDOG_TIMEOUT_MS) {
-    Serial.printf("🚨 MQTT TASK TIMEOUT: %lu ms since last heartbeat\n",
+    DEBUG_PRINTF("🚨 MQTT TASK TIMEOUT: %lu ms since last heartbeat\n",
                   currentTime - mqttTaskLastSeen);
     reportSystemError("WATCHDOG", "MQTT task timeout", currentTime - mqttTaskLastSeen);
   }
@@ -273,24 +280,24 @@ void performHealthCheck() {
   systemHealth.minFreeHeap = ESP.getMinFreeHeap();
 
   if (systemHealth.freeHeap < MIN_FREE_HEAP) {
-    Serial.printf("🚨 LOW MEMORY WARNING: %lu bytes free (threshold: %lu)\n",
+    DEBUG_PRINTF("🚨 LOW MEMORY WARNING: %lu bytes free (threshold: %lu)\n",
                   systemHealth.freeHeap, MIN_FREE_HEAP);
     reportSystemError("MEMORY", "Low heap memory", systemHealth.freeHeap);
   }
 }
 
 void reportSystemError(const char* subsystem, const char* error, int code) {
-  Serial.printf("🚨 SYSTEM ERROR [%s]: %s", subsystem, error);
+  DEBUG_PRINTF("🚨 SYSTEM ERROR [%s]: %s", subsystem, error);
   if (code != 0) {
-    Serial.printf(" (code: %d)", code);
+    DEBUG_PRINTF(" (code: %d)", code);
   }
-  Serial.println();
+  DEBUG_PRINTLN();
 }
 
 void watchdogTask(void *pvParameters) {
   (void)pvParameters;
-  Serial.println("🐕 Watchdog Task started - Independent system health monitoring");
-  Serial.printf("🐕 Running on Core %d with priority %d\n", xPortGetCoreID(), uxTaskPriorityGet(NULL));
+  DEBUG_PRINTLN("🐕 Watchdog Task started - Independent system health monitoring");
+  DEBUG_PRINTF("🐕 Running on Core %d with priority %d\n", xPortGetCoreID(), uxTaskPriorityGet(NULL));
 
   while (true) {
     performHealthCheck();

@@ -1,4 +1,5 @@
 #include "dtsu666.h"
+#include "debug.h"
 
 // Register name mapping for debugging
 const char* dtsuRegisterNames[40] = {
@@ -293,12 +294,12 @@ static inline uint16_t crc16_modbus(const uint8_t* p, size_t n) {
 }
 
 void printHexDump(const char* label, const uint8_t* buf, size_t len) {
-  Serial.printf("   %s [%zu]: ", label, len);
+  DEBUG_PRINTF("   %s [%zu]: ", label, len);
   for (size_t i = 0; i < len; i += 16) {
-    Serial.printf("\n      ");
-    for (size_t j = 0; j < 16 && (i+j) < len; ++j) Serial.printf("%02X ", buf[i+j]);
+    DEBUG_PRINTF("\n      ");
+    for (size_t j = 0; j < 16 && (i+j) < len; ++j) DEBUG_PRINTF("%02X ", buf[i+j]);
   }
-  Serial.println();
+  DEBUG_PRINTLN();
 }
 
 bool applyPowerCorrection(uint8_t* raw, uint16_t len, float correction) {

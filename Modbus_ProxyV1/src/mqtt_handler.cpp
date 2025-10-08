@@ -1,7 +1,12 @@
 #include "mqtt_handler.h"
 #include "credentials.h"
+#include "debug.h"
 #include "evcc_api.h"
 #include "modbus_proxy.h"
+#include <Adafruit_NeoPixel.h>
+
+// External NeoPixel reference
+extern Adafruit_NeoPixel pixel;
 
 // Global MQTT objects
 WiFiClient wifiClient;
@@ -22,20 +27,23 @@ struct MQTTPublishItem {
 };
 
 bool initMQTT() {
-  Serial.printf("🔗 Setting up MQTT connection to %s:%d\n", mqttServer, mqttPort);
+  DEBUG_PRINTF("🔗 Setting up MQTT connection to %s:%d\n", mqttServer, mqttPort);
 
   mqttClient.setServer(mqttServer, mqttPort);
+  mqttClient.setBufferSize(1024);
+  mqttClient.setKeepAlive(60);
+  mqttClient.setSocketTimeout(15);
   mqttClient.setCallback(onMqttMessage);
 
   mqttPublishQueue = xQueueCreate(10, sizeof(MQTTPublishItem));
   if (mqttPublishQueue == NULL) {
-    Serial.println("❌ Failed to create MQTT publish queue");
+    DEBUG_PRINTLN("❌ Failed to create MQTT publish queue");
     return false;
   }
 
   mqttDataQueue.mutex = xSemaphoreCreateMutex();
   if (mqttDataQueue.mutex == NULL) {
-    Serial.println("❌ Failed to create MQTT data queue mutex");
+    DEBUG_PRINTLN("❌ Failed to create MQTT data queue mutex");
     return false;
   }
 
@@ -50,13 +58,23 @@ bool connectToMQTT() {
   mqttReconnectCount++;
   systemHealth.mqttReconnects = mqttReconnectCount;
 
-  Serial.printf("🔌 MQTT reconnection attempt #%lu...", mqttReconnectCount);
+  // Phase 3: MQTT connection - Blink red during attempt
+  pixel.setPixelColor(0, pixel.Color(255, 0, 0));
+  pixel.show();
 
-  if (mqttClient.connect("ESP32_ModbusProxy")) {
-    Serial.println(" ✅ CONNECTED!");
+  DEBUG_PRINTF("🔌 MQTT reconnection attempt #%lu...", mqttReconnectCount);
+
+  String clientId = "MBUS_PROXY_" + WiFi.macAddress();
+  clientId.replace(":", "");
+  if (mqttClient.connect(clientId.c_str(), NULL, NULL, NULL, 0, false, NULL, true)) {
+    DEBUG_PRINTLN(" ✅ CONNECTED!");
+    pixel.setPixelColor(0, pixel.Color(0, 0, 0));
+    pixel.show();
     return true;
   } else {
-    Serial.printf(" ❌ FAILED (state=%d)\n", mqttClient.state());
+    DEBUG_PRINTF(" ❌ FAILED (state=%d)\n", mqttClient.state());
+    pixel.setPixelColor(0, pixel.Color(0, 0, 0));
+    pixel.show();
     return false;
   }
 }
@@ -68,8 +86,8 @@ void mqttTask(void *pvParameters) {
   uint32_t lastEvccPoll = 0;
   uint32_t loopCount = 0;
 
-  Serial.println("📡 MQTT TASK STARTED");
-  Serial.printf("🧠 Task Info: Core=%d, Priority=%d\n", xPortGetCoreID(), uxTaskPriorityGet(NULL));
+  DEBUG_PRINTLN("📡 MQTT TASK STARTED");
+  DEBUG_PRINTF("🧠 Task Info: Core=%d, Priority=%d\n", xPortGetCoreID(), uxTaskPriorityGet(NULL));
 
   while (1) {
     uint32_t loopStart = millis();
@@ -79,7 +97,7 @@ void mqttTask(void *pvParameters) {
     if (millis() - lastDebugTime > 10000) {
       uint32_t freeHeap = ESP.getFreeHeap();
       uint32_t minFreeHeap = ESP.getMinFreeHeap();
-      Serial.printf("🐛 MQTT Task Debug: Loop #%lu, Connected=%s, Heap=%u (min=%u)\n",
+      DEBUG_PRINTF("🐛 MQTT Task Debug: Loop #%lu, Connected=%s, Heap=%u (min=%u)\n",
                     loopCount, mqttClient.connected() ? "YES" : "NO", freeHeap, minFreeHeap);
       lastDebugTime = millis();
     }
@@ -90,9 +108,9 @@ void mqttTask(void *pvParameters) {
 
     // MQTT connection handling
     if (!mqttClient.connected()) {
-      Serial.printf("🔄 MQTT reconnecting... (state=%d)\n", mqttClient.state());
+      DEBUG_PRINTF("🔄 MQTT reconnecting... (state=%d)\n", mqttClient.state());
       if (!connectToMQTT()) {
-        Serial.println("⚠️  MQTT connection failed, continuing anyway");
+        DEBUG_PRINTLN("⚠️  MQTT connection failed, continuing anyway");
       }
     }
 
@@ -101,7 +119,7 @@ void mqttTask(void *pvParameters) {
     mqttClient.loop();
     uint32_t loopDuration = millis() - loopStartTime;
     if (loopDuration > 1000) {
-      Serial.printf("⚠️  MQTT loop took %lu ms\n", loopDuration);
+      DEBUG_PRINTF("⚠️  MQTT loop took %lu ms\n", loopDuration);
     }
 
     // Process MQTT queue
@@ -109,21 +127,21 @@ void mqttTask(void *pvParameters) {
     processMQTTQueue();
     uint32_t queueDuration = millis() - queueStartTime;
     if (queueDuration > 1000) {
-      Serial.printf("⚠️  MQTT queue processing took %lu ms\n", queueDuration);
+      DEBUG_PRINTF("⚠️  MQTT queue processing took %lu ms\n", queueDuration);
     }
 
     // EVCC API polling
     if (millis() - lastEvccPoll > HTTP_POLL_INTERVAL) {
-      Serial.println("🌐 Polling EVCC API...");
+      DEBUG_PRINTLN("🌐 Polling EVCC API...");
       uint32_t pollStart = millis();
       bool success = pollEvccApi(sharedEVCC);
       uint32_t pollDuration = millis() - pollStart;
 
-      Serial.printf("🌐 EVCC API poll %s in %lu ms\n",
+      DEBUG_PRINTF("🌐 EVCC API poll %s in %lu ms\n",
                     success ? "SUCCESS" : "FAILED", pollDuration);
 
       if (pollDuration > 5000) {
-        Serial.printf("⚠️  EVCC API poll took %lu ms (blocking!)\n", pollDuration);
+        DEBUG_PRINTF("⚠️  EVCC API poll took %lu ms (blocking!)\n", pollDuration);
       }
 
       lastEvccPoll = millis();
@@ -132,13 +150,13 @@ void mqttTask(void *pvParameters) {
     // System health reporting
     if (millis() - lastReportTime > 60000) {
       lastReportTime = millis();
-      Serial.println("📊 Publishing system health...");
+      DEBUG_PRINTLN("📊 Publishing system health...");
       publishSystemHealth(systemHealth);
     }
 
     uint32_t totalLoopTime = millis() - loopStart;
     if (totalLoopTime > 5000) {
-      Serial.printf("⚠️  MQTT task loop took %lu ms (too long!)\n", totalLoopTime);
+      DEBUG_PRINTF("⚠️  MQTT task loop took %lu ms (too long!)\n", totalLoopTime);
     }
 
     vTaskDelay(pdMS_TO_TICKS(100));
@@ -224,7 +242,7 @@ void queueCorrectedPowerData(const DTSU666Data& finalData, const DTSU666Data& or
   item.timestamp = millis();
 
   if (xQueueSend(mqttPublishQueue, &item, 0) != pdTRUE) {
-    Serial.println("⚠️ MQTT publish queue full, dropping data");
+    DEBUG_PRINTLN("⚠️ MQTT publish queue full, dropping data");
   }
 }
 
@@ -248,17 +266,15 @@ void processMQTTQueue() {
     if (mqttClient.connected()) {
       StaticJsonDocument<256> doc;
 
-      // The three key power values that matter
-      doc["dtsu"] = item.originalData.power_total;      // What DTSU meter reads
-      doc["wallbox"] = item.correctionValue;            // Wallbox power from EVCC
-      doc["sun2000"] = item.correctedData.power_total;  // What SUN2000 inverter sees
-
-      // Validation: dtsu + wallbox should equal sun2000
+      doc["dtsu"] = item.originalData.power_total;
+      doc["wallbox"] = item.correctionValue;
+      doc["sun2000"] = item.correctedData.power_total;
       doc["active"] = item.correctionApplied;
 
-      mqttPublishJSON(MQTT_TOPIC_POWER, doc);
+      bool success = mqttPublishJSON(MQTT_TOPIC_POWER, doc);
+      DEBUG_PRINTF("📤 MQTT publish %s (state=%d)\n", success ? "OK" : "FAILED", mqttClient.state());
     } else {
-      Serial.println("⚠️ MQTT not connected, dropping queued data");
+      DEBUG_PRINTLN("⚠️ MQTT not connected, dropping queued data");
     }
   }
 }
@@ -293,13 +309,13 @@ void convertDTSUToMQTT(const DTSU666Data& dtsu, MQTTSensorData& mqtt, const Stri
 }
 
 void debugMQTTData(const String& time, const String& smid, const DTSU666Data& data) {
-  Serial.printf("🔍 MQTT Data: %s [%s]\n", time.c_str(), smid.c_str());
-  Serial.printf("   Power: %.1fW (L1:%.1f L2:%.1f L3:%.1f)\n",
+  DEBUG_PRINTF("🔍 MQTT Data: %s [%s]\n", time.c_str(), smid.c_str());
+  DEBUG_PRINTF("   Power: %.1fW (L1:%.1f L2:%.1f L3:%.1f)\n",
                 data.power_total, data.power_L1, data.power_L2, data.power_L3);
-  Serial.printf("   Voltage: %.1fV (L1:%.1f L2:%.1f L3:%.1f)\n",
+  DEBUG_PRINTF("   Voltage: %.1fV (L1:%.1f L2:%.1f L3:%.1f)\n",
                 data.voltage_LN_avg, data.voltage_L1N, data.voltage_L2N, data.voltage_L3N);
-  Serial.printf("   Current: %.2fA (L1:%.2f L2:%.2f L3:%.2f)\n",
+  DEBUG_PRINTF("   Current: %.2fA (L1:%.2f L2:%.2f L3:%.2f)\n",
                 (data.current_L1 + data.current_L2 + data.current_L3) / 3.0f,
                 data.current_L1, data.current_L2, data.current_L3);
-  Serial.printf("   Frequency: %.2fHz\n", data.frequency);
+  DEBUG_PRINTF("   Frequency: %.2fHz\n", data.frequency);
 }

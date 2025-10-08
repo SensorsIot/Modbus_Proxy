@@ -121,6 +121,9 @@ bool ModbusRTU485::read(ModbusMessage& out, uint32_t timeoutMs) {
   // Consume a frame until inter-char gap >= 3.5T
   uint32_t lastUs = micros();
   while (true) {
+    // Check overall timeout to prevent infinite loop
+    if (timeoutMs && (millis() - start >= timeoutMs)) return false;
+
     while (_ser->available()) {
       int b = _ser->read();
       if (b < 0) break;

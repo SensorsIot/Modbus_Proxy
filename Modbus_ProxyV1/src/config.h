@@ -1,8 +1,11 @@
 #pragma once
 
-// ESP32-S3 Pin definitions (GPIO 3/4 and 12/13)
-#define RS485_SUN2000_RX_PIN 4
-#define RS485_SUN2000_TX_PIN 3
+// Debug settings
+#define ENABLE_SERIAL_DEBUG true
+
+// ESP32-S3 Pin definitions (GPIO 1/4 and 12/13)
+#define RS485_SUN2000_RX_PIN 7
+#define RS485_SUN2000_TX_PIN 6
 #define RS485_DTU_RX_PIN 13
 #define RS485_DTU_TX_PIN 12
 

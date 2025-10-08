@@ -1,6 +1,7 @@
 #include "evcc_api.h"
 #include "credentials.h"
 #include "config.h"
+#include "debug.h"
 
 // HTTP client mutex for thread safety
 SemaphoreHandle_t httpClientMutex = NULL;
@@ -8,17 +9,17 @@ SemaphoreHandle_t httpClientMutex = NULL;
 bool initEVCCAPI() {
   httpClientMutex = xSemaphoreCreateMutex();
   if (httpClientMutex == NULL) {
-    Serial.println("❌ Failed to create HTTP client mutex");
+    DEBUG_PRINTLN("❌ Failed to create HTTP client mutex");
     return false;
   }
-  Serial.println("✅ HTTP client mutex created");
+  DEBUG_PRINTLN("✅ HTTP client mutex created");
   return true;
 }
 
 bool pollEvccApi(SharedEVCCData& sharedData) {
   // Protect HTTP client access with mutex
   if (xSemaphoreTake(httpClientMutex, pdMS_TO_TICKS(5000)) != pdTRUE) {
-    Serial.println("❌ Failed to acquire HTTP mutex");
+    DEBUG_PRINTLN("❌ Failed to acquire HTTP mutex");
     return false;
   }
 
@@ -64,7 +65,7 @@ bool pollEvccApi(SharedEVCCData& sharedData) {
       sharedData.errorCount++;
       xSemaphoreGive(sharedData.mutex);
     }
-    Serial.printf("❌ JSON parse error: %s\n", error.c_str());
+    DEBUG_PRINTF("❌ JSON parse error: %s\n", error.c_str());
     logAPIError("JSON parsing failed: " + String(error.c_str()));
     return false;
   }
@@ -156,8 +157,8 @@ bool httpGetJSON(const char* url, JsonDocument& doc) {
 
 void logAPIError(const String& error, int httpCode) {
   if (httpCode != 0) {
-    Serial.printf("❌ EVCC API Error: %s (HTTP %d)\n", error.c_str(), httpCode);
+    DEBUG_PRINTF("❌ EVCC API Error: %s (HTTP %d)\n", error.c_str(), httpCode);
   } else {
-    Serial.printf("❌ EVCC API Error: %s\n", error.c_str());
+    DEBUG_PRINTF("❌ EVCC API Error: %s\n", error.c_str());
   }
 }
