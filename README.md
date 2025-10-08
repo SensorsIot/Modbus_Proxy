@@ -262,8 +262,7 @@ Default OTA password: `modbus_ota_2023`
 
 ## 📚 Documentation
 
-- **[FSD.md](Modbus_ProxyV1/FSD.md)**: Complete Functional Specification Document
-- **[Modbus-Proxy-FSD.md](Modbus_ProxyV1/Modbus-Proxy-FSD.md)**: Legacy FSD (ESP32-S3 only)
+- **[Modbus-Proxy-FSD.md](Modbus_ProxyV1/Modbus-Proxy-FSD.md)**: Complete Functional Specification Document (v3.0)
 
 ---
 
