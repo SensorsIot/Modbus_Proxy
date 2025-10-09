@@ -1,0 +1,22 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "modbus_rtu.c"
+        "wifi_handler.c"
+        "mqtt_handler.c"
+        "http_client.c"
+        "modbus_proxy.c"
+        "dtsu666.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        driver
+        nvs_flash
+        esp_wifi
+        esp_netif
+        esp_http_client
+        mqtt
+        json
+        esp_timer
+        esp_event
+)
