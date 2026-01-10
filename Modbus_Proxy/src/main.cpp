@@ -21,11 +21,6 @@
 
 // Global variable definitions are in credentials.h
 
-// Telnet debug instance
-#if defined(ENABLE_TELNET_DEBUG) && ENABLE_TELNET_DEBUG
-TelnetDebug telnetDebug;
-#endif
-
 // Output options
 #ifndef PRINT_FANCY_TABLE
 #define PRINT_FANCY_TABLE false
@@ -34,7 +29,6 @@ TelnetDebug telnetDebug;
 // WiFi and MQTT setup functions
 void setupWiFi();
 void setupMQTT();
-void discoverModbusPins();
 
 void setupWiFi() {
   // Disable WiFi power saving to prevent spinlock issues
@@ -165,13 +159,6 @@ void setup() {
     setupWiFi();
     setupOTA();
 
-    // Initialize Telnet debug server after WiFi
-#if defined(ENABLE_TELNET_DEBUG) && ENABLE_TELNET_DEBUG
-    telnetDebug.begin(23);
-    DEBUG_PRINTLN("📡 Telnet debug server started on port 23");
-    DEBUG_PRINTF("   Connect via: telnet %s 23\n", WiFi.localIP().toString().c_str());
-#endif
-
     // Initialize system health monitoring
     uint32_t currentTime = millis();
     systemHealth.uptime = currentTime;
@@ -181,9 +168,6 @@ void setup() {
 
     // Initialize MQTT after WiFi
     setupMQTT();
-
-    // Run pin discovery to find active MODBUS RX pins
-    discoverModbusPins();
 
     // Initialize modular components
     if (!initModbusProxy()) {
@@ -244,123 +228,7 @@ void setup() {
     }
 }
 
-void discoverModbusPins() {
-    DEBUG_PRINTLN("\n🔍 MODBUS PIN DISCOVERY MODE");
-    DEBUG_PRINTLN("Scanning configured GPIO pins for MODBUS traffic...");
-
-    // Test only the configured pins
-    const uint8_t testPins[] = {RS485_SUN2000_RX_PIN, RS485_SUN2000_TX_PIN, RS485_DTU_RX_PIN, RS485_DTU_TX_PIN};
-    const uint8_t numPins = sizeof(testPins) / sizeof(testPins[0]);
-
-    struct PinActivity {
-        uint8_t pin;
-        uint32_t byteCount;
-        uint32_t transitions;
-    };
-
-    PinActivity activity[numPins] = {};
-
-    // Initialize all test pins as INPUT
-    for (uint8_t i = 0; i < numPins; i++) {
-        pinMode(testPins[i], INPUT);
-        activity[i].pin = testPins[i];
-        activity[i].byteCount = 0;
-        activity[i].transitions = 0;
-    }
-
-    DEBUG_PRINTLN("⏱️  Monitoring for 15 seconds...");
-
-    // Monitor for 15 seconds
-    uint32_t startTime = millis();
-    uint32_t lastReportTime = millis();
-    uint8_t lastState[numPins];
-
-    // Initialize last state
-    for (uint8_t i = 0; i < numPins; i++) {
-        lastState[i] = digitalRead(testPins[i]);
-    }
-
-    while (millis() - startTime < 15000) {
-        for (uint8_t i = 0; i < numPins; i++) {
-            uint8_t currentState = digitalRead(testPins[i]);
-            if (currentState != lastState[i]) {
-                activity[i].transitions++;
-                lastState[i] = currentState;
-            }
-        }
-
-        // Progress indicator every 3 seconds
-        if (millis() - lastReportTime > 3000) {
-            DEBUG_PRINTF("   ⏳ %lu seconds elapsed...\n", (millis() - startTime) / 1000);
-            lastReportTime = millis();
-        }
-
-        // Feed watchdog and yield to prevent WDT reset
-        yield();
-        delayMicroseconds(500); // Sample at ~2kHz (sufficient for 9600 baud)
-    }
-
-    DEBUG_PRINTLN("\n📊 DISCOVERY RESULTS:");
-    DEBUG_PRINTLN("GPIO | Transitions | Likely");
-    DEBUG_PRINTLN("-----|-------------|-------");
-
-    uint8_t candidateRxPins[4] = {255, 255, 255, 255};
-    uint8_t candidateCount = 0;
-
-    for (uint8_t i = 0; i < numPins; i++) {
-        const char* likely = "";
-        if (activity[i].transitions > 100) {
-            likely = "← ACTIVE (RX candidate)";
-            if (candidateCount < 4) {
-                candidateRxPins[candidateCount++] = activity[i].pin;
-            }
-        } else if (activity[i].transitions > 10) {
-            likely = "← Some activity";
-        }
-
-        DEBUG_PRINTF("  %2d | %11lu | %s\n",
-                     activity[i].pin,
-                     activity[i].transitions,
-                     likely);
-    }
-
-    DEBUG_PRINTLN();
-
-    if (candidateCount >= 2) {
-        DEBUG_PRINTLN("✅ FOUND CANDIDATE RX PINS:");
-        DEBUG_PRINTF("   Likely SUN2000 RX: GPIO %d (or GPIO %d)\n",
-                     candidateRxPins[0], candidateRxPins[1]);
-        if (candidateCount > 2) {
-            DEBUG_PRINTF("   Likely DTSU RX: GPIO %d (or GPIO %d)\n",
-                         candidateRxPins[2], candidateCount > 3 ? candidateRxPins[3] : candidateRxPins[1]);
-        }
-        DEBUG_PRINTLN("\n💡 Update config.h with these pins and reflash.");
-        DEBUG_PRINTLN("   Continuing with current configuration...\n");
-    } else if (candidateCount == 1) {
-        DEBUG_PRINTF("⚠️  WARNING: Only found 1 active pin (GPIO %d)\n", candidateRxPins[0]);
-        DEBUG_PRINTLN("   Expected 2 active RX pins (SUN2000 and DTSU)");
-        DEBUG_PRINTLN("   Check your connections and try again.\n");
-    } else {
-        DEBUG_PRINTLN("❌ ERROR: No MODBUS traffic detected on any GPIO!");
-        DEBUG_PRINTLN("   Possible issues:");
-        DEBUG_PRINTLN("   - RS485 adapters not connected");
-        DEBUG_PRINTLN("   - SUN2000 not polling DTSU");
-        DEBUG_PRINTLN("   - Wrong baud rate or wiring");
-        DEBUG_PRINTLN("   - RS485 A/B lines swapped");
-        DEBUG_PRINTLN("\n⏸️  Halting - fix connections and restart.\n");
-
-        // Blink LED rapidly to indicate error
-        while (true) {
-            LED_ON();
-            delay(100);
-            LED_OFF();
-            delay(100);
-        }
-    }
-}
-
 void loop() {
     ArduinoOTA.handle();
-    DEBUG_HANDLE();  // Handle telnet client connections
-    vTaskDelay(100);  // Faster loop for responsive telnet
+    vTaskDelay(100);
 }

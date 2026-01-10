@@ -1,8 +1,7 @@
 #pragma once
 
-// Debug settings - Telnet wireless debugging for ESP32-C3
-#define ENABLE_SERIAL_DEBUG false
-#define ENABLE_TELNET_DEBUG false
+// Debug settings
+#define ENABLE_SERIAL_DEBUG true
 
 // ESP32-C3 Pin definitions - safe GPIOs for UART
 #define RS485_SUN2000_RX_PIN 7
