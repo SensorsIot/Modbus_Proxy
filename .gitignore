@@ -90,3 +90,7 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Merged from Modbus_Proxy/.gitignore
+.vscode/.browse.c_cpp.db*
+.vscode/ipch
