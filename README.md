@@ -262,7 +262,7 @@ Default OTA password: `modbus_ota_2023`
 
 ## 📚 Documentation
 
-- **[Modbus-Proxy-FSD.md](Modbus_Proxy/Modbus-Proxy-FSD.md)**: Complete Functional Specification Document (v3.0)
+- **[Modbus-Proxy-FSD.md](Documents/Modbus-Proxy-FSD.md)**: Complete Functional Specification Document (v3.0)
 
 ---
 
