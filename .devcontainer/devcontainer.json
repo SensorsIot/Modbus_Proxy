@@ -1,0 +1,46 @@
+{
+    "name": "Modbus_Proxy - ESP32 PlatformIO",
+    "build": {
+        "dockerfile": "Dockerfile",
+        "context": ".."
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "platformio.platformio-ide",
+                "ms-vscode.cpptools",
+                "ms-vscode.cpptools-extension-pack"
+            ],
+            "settings": {
+                "terminal.integrated.defaultProfile.linux": "bash",
+                "platformio-ide.useBuiltinPIOCore": false,
+                "C_Cpp.default.configurationProvider": "platformio.platformio-ide"
+            }
+        }
+    },
+    "features": {
+        "ghcr.io/devcontainers/features/python:1": {
+            "version": "3.11"
+        },
+        "ghcr.io/devcontainers/features/git:1": {},
+        "ghcr.io/devcontainers/features/node:1": {
+            "version": "lts"
+        },
+        "ghcr.io/devcontainers/features/sshd:1": {
+            "version": "latest"
+        }
+    },
+    "appPort": ["2222:2222"],
+    "postCreateCommand": "git clone git@github.com:SensorsIot/DotFiles.git ~/DotFiles && ~/DotFiles/install.sh && pip install platformio && pio pkg install --project-dir Modbus_Proxy",
+    "remoteUser": "vscode",
+    "runArgs": [
+        "--device-cgroup-rule=c 188:* rmw"
+    ],
+    "mounts": [
+        "source=/dev,target=/dev,type=bind,consistency=consistent",
+        "source=${localEnv:HOME}/.ssh,target=/home/vscode/.ssh,type=bind,readonly"
+    ],
+    "containerEnv": {
+        "PLATFORMIO_CORE_DIR": "/home/vscode/.platformio"
+    }
+}
