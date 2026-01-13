@@ -1,16 +1,10 @@
 FROM mcr.microsoft.com/devcontainers/base:debian
 
-# Create dev user (UID 1000 to match host)
-ARG USERNAME=dev
-ARG USER_UID=1000
-ARG USER_GID=$USER_UID
-
-RUN groupadd --gid $USER_GID $USERNAME \
-    && useradd --uid $USER_UID --gid $USER_GID -m $USERNAME \
-    && apt-get update \
-    && apt-get install -y sudo \
-    && echo $USERNAME ALL=\(root\) NOPASSWD:ALL > /etc/sudoers.d/$USERNAME \
-    && chmod 0440 /etc/sudoers.d/$USERNAME
+# Rename vscode user to dev (base image has vscode with UID 1000)
+RUN usermod -l dev -d /home/dev -m vscode \
+    && groupmod -n dev vscode \
+    && sed -i 's/vscode/dev/g' /etc/sudoers.d/vscode || true \
+    && mv /etc/sudoers.d/vscode /etc/sudoers.d/dev 2>/dev/null || true
 
 # Install required packages for PlatformIO and ESP32 development
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -33,4 +27,4 @@ RUN echo 'SUBSYSTEMS=="usb", ATTRS{idVendor}=="303a", MODE="0666"' > /etc/udev/r
 # PlatformIO PATH
 ENV PATH="/home/dev/.local/bin:${PATH}"
 
-USER $USERNAME
+USER dev

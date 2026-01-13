@@ -30,15 +30,16 @@
             "version": "latest"
         }
     },
-    "appPort": ["2222:2222"],
-    "postCreateCommand": "git clone git@github.com:SensorsIot/DotFiles.git ~/DotFiles && ~/DotFiles/install.sh && pip install platformio==6.1.16 && pio pkg install --project-dir Modbus_Proxy",
+    "appPort": ["2223:2222"],
+    "postCreateCommand": "(git clone https://github.com/SensorsIot/DotFiles.git ~/DotFiles && ~/DotFiles/install.sh) || true && pip install platformio==6.1.16 && pio pkg install --project-dir Modbus_Proxy",
+    "workspaceFolder": "/workspaces/Modbus_Proxy",
     "remoteUser": "dev",
     "runArgs": [
         "--device-cgroup-rule=c 188:* rmw"
     ],
     "mounts": [
         "source=/dev,target=/dev,type=bind,consistency=consistent",
-        "source=${localEnv:HOME}/.ssh,target=/home/dev/.ssh,type=bind,readonly"
+        "source=${localEnv:HOME}/.ssh/authorized_keys,target=/home/dev/.ssh/authorized_keys,type=bind,readonly"
     ],
     "containerEnv": {
         "PLATFORMIO_CORE_DIR": "/home/dev/.platformio"
