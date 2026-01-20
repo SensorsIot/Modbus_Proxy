@@ -109,14 +109,15 @@ git checkout S3
 
 3. **Configure credentials**:
 ```bash
-cd Modbus_Proxy/src
+cd src
 cp credentials.h.example credentials.h
 # Edit credentials.h with your WiFi and MQTT settings
 ```
 
 4. **Build and upload**:
 ```bash
-cd Modbus_Proxy
+# Return to project root if you are in src/
+cd ..
 
 # Serial upload (first time)
 pio run -e esp32-c3-serial --target upload    # For ESP32-C3
@@ -232,7 +233,7 @@ Published every 60 seconds
 ### Building
 
 ```bash
-cd Modbus_Proxy
+
 
 # Build only (no upload)
 pio run -e esp32-c3-serial   # ESP32-C3
@@ -262,7 +263,7 @@ Default OTA password: `modbus_ota_2023`
 
 ## 📚 Documentation
 
-- **[Modbus-Proxy-FSD.md](Modbus_Proxy/Modbus-Proxy-FSD.md)**: Complete Functional Specification Document (v3.0)
+- **[Modbus-Proxy-FSD.md](Documents/Modbus-Proxy-FSD.md)**: Complete Functional Specification Document (v3.0)
 
 ---
 
