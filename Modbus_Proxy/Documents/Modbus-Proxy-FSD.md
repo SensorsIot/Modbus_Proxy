@@ -1,8 +1,8 @@
 # ESP32 MODBUS RTU Intelligent Proxy - Functional Specification Document
 
-**Version:** 3.0
-**Date:** January 2025
-**Platform:** ESP32-S3 (dual-core) / ESP32-C3 (single-core)
+**Version:** 5.0
+**Date:** February 2026
+**Platform:** ESP32-C3 (single-core RISC-V)
 **Author:** Andreas Spiess / Claude Code
 
 ---
@@ -10,44 +10,27 @@
 ## 1. System Overview
 
 ### 1.1 Purpose
-The ESP32 MODBUS RTU Intelligent Proxy is a sophisticated power monitoring system that sits between a SUN2000 solar inverter and a DTSU-666 energy meter, providing real-time power correction by integrating wallbox charging data from an EVCC system.
+The ESP32 MODBUS RTU Intelligent Proxy is a sophisticated power monitoring system that sits between a SUN2000 solar inverter and a DTSU-666 energy meter, providing real-time power correction by integrating wallbox charging data via MQTT.
 
 ### 1.2 Primary Goals
 - **Intelligent Power Correction**: Integrate wallbox power consumption into solar inverter energy management
 - **Transparent MODBUS Proxy**: Seamless bidirectional communication between SUN2000 and DTSU-666
 - **System Reliability**: Comprehensive auto-restart and health monitoring capabilities
 - **Real-time Monitoring**: MQTT-based power data publishing and system health status
+- **OTA Configuration**: Runtime configuration changes via MQTT commands
+- **WiFi Provisioning**: Captive portal for initial WiFi setup (triggered by 3 power cycles)
+- **Remote Management**: MQTT broker selection and OTA debugging without physical access
 
 ---
 
-## 2. Hardware Variants
+## 2. Hardware Configuration
 
-### 2.1 ESP32-S3 Configuration (Branch: S3)
-
-**Hardware:**
-- **MCU**: ESP32-S3 (dual-core Xtensa, 240MHz)
-- **Board**: Lolin S3 Mini
-- **UARTs**: 3 available (UART0 for USB CDC, UART1/UART2 for RS485)
-- **Status LED**: GPIO 48 (normal logic)
-
-**Pin Configuration:**
-- **SUN2000 Interface**: UART1 (RX=GPIO18, TX=GPIO17)
-- **DTSU-666 Interface**: UART2 (RX=GPIO16, TX=GPIO15)
-
-**Task Distribution:**
-- **Core 0**: MQTT task (Priority 1), Watchdog task (Priority 3)
-- **Core 1**: Proxy task (Priority 2, dedicated MODBUS processing)
-
-**Debug Options:**
-- USB Serial debugging (115200 baud)
-- Telnet wireless debugging (port 23)
-
-### 2.2 ESP32-C3 Configuration (Branch: main)
+### 2.1 ESP32-C3 Configuration (Branch: main)
 
 **Hardware:**
 - **MCU**: ESP32-C3 (single-core RISC-V, 160MHz)
 - **Board**: ESP32-C3-DevKitM-1
-- **UARTs**: 2 available (UART0/UART1 for RS485, no USB CDC)
+- **UARTs**: 2 available (UART0/UART1 for RS485)
 - **Status LED**: GPIO 8 (inverted logic)
 
 **Pin Configuration:**
@@ -58,7 +41,7 @@ The ESP32 MODBUS RTU Intelligent Proxy is a sophisticated power monitoring syste
 - **Single Core**: All tasks (MQTT Priority 1, Proxy Priority 2, Watchdog Priority 3)
 
 **Debug Options:**
-- Telnet wireless debugging only (USB CDC disabled to free UART0)
+- USB Serial debugging (115200 baud, if enabled)
 
 ---
 
@@ -71,27 +54,14 @@ Grid ←→ L&G Meter ←→ Wallbox ←→ DTSU-666 ←→ SUN2000 Inverter
         (Reference)   (4.2kW)    (Proxy)      (Solar)
                          ↑
                     ESP32 Proxy
-                  (WiFi/HTTP/MQTT)
+                  (WiFi/MQTT/OTA)
                          ↓
-                   EVCC System
+                   MQTT Broker
+                         ↓
+                   Wallbox/EVCC
 ```
 
-### 3.2 Software Architecture (ESP32-S3 Dual-Core)
-
-```
-Core 0:                          Core 1:
-├── MQTT Task (Priority 1)       ├── Proxy Task (Priority 2)
-│   │   Stack: 16KB              │   │   Stack: 4KB
-│   ├── EVCC API polling (10s)   │   ├── MODBUS proxy
-│   ├── JSON parsing (8KB buf)   │   ├── Power correction
-│   └── MQTT publishing          │   ├── LED activity indication
-├── Watchdog Task (Priority 3)   │   └── Heartbeat updates
-│   ├── Health monitoring (5s)
-│   ├── Failure detection
-│   └── Auto-restart triggers
-```
-
-### 3.3 Software Architecture (ESP32-C3 Single-Core)
+### 3.2 Software Architecture
 
 ```
 Single Core:
@@ -100,11 +70,13 @@ Single Core:
 │   ├── Power correction
 │   └── LED activity indication
 ├── MQTT Task (Priority 1)
-│   ├── EVCC API polling (10s)
-│   ├── JSON parsing (8KB buf)
-│   └── MQTT publishing
+│   ├── Wallbox power subscription
+│   ├── Config command handling
+│   ├── Power data publishing
+│   └── Log queue processing
 └── Watchdog Task (Priority 3)
     ├── Health monitoring (5s)
+    ├── Hardware WDT feed (90s timeout)
     └── Auto-restart triggers
 ```
 
@@ -120,21 +92,29 @@ Single Core:
 - **Data Format**: Big-endian IEEE 754 32-bit floats
 - **CRC Validation**: Automatic validation and recalculation
 
-### 4.2 EVCC HTTP API
-- **URL**: `http://192.168.0.202:7070/api/state`
-- **Method**: GET (JSON response)
-- **Data Path**: `loadpoints[0].chargePower` (watts)
-- **Polling Interval**: 10 seconds
-- **Buffer Size**: StaticJsonDocument<8192>
-- **Hostname**: "MODBUS-Proxy"
-
-### 4.3 MQTT Communication
+### 4.2 MQTT Communication
 
 **Broker Configuration:**
-- **Server**: 192.168.0.203:1883
+- **Default Server**: 192.168.0.203:1883
 - **Client ID**: MBUS_PROXY_{MAC_ADDRESS}
 - **Buffer Size**: 1024 bytes
 - **Keep Alive**: 60 seconds
+- **Authentication**: Optional username/password
+
+**Subscribed Topics:**
+
+1. **Wallbox Power** (configurable, default: `wallbox`)
+   - Accepts plain float: `1234.5`
+   - Accepts JSON: `{"power": 1234.5}` or `{"chargePower": 1234.5}`
+
+2. **Configuration Commands** (`MBUS-PROXY/cmd/config`)
+```json
+{"cmd": "set_mqtt", "host": "192.168.0.100", "port": 1883, "user": "admin", "pass": "secret"}
+{"cmd": "set_wallbox_topic", "topic": "evcc/loadpoints/0/chargePower"}
+{"cmd": "set_log_level", "level": 2}
+{"cmd": "get_config"}
+{"cmd": "factory_reset"}
+```
 
 **Published Topics:**
 
@@ -157,11 +137,34 @@ Single Core:
   "min_free_heap": 200000,
   "mqtt_reconnects": 0,
   "dtsu_updates": 1234,
-  "evcc_updates": 123,
-  "evcc_errors": 0,
+  "wallbox_updates": 123,
+  "wallbox_errors": 0,
   "proxy_errors": 0,
   "power_correction": 0.0,
   "correction_active": false
+}
+```
+
+3. **MBUS-PROXY/log** (based on log level)
+```json
+{
+  "ts": 123456,
+  "level": "WARN",
+  "subsys": "MQTT",
+  "msg": "Connection lost"
+}
+```
+
+4. **MBUS-PROXY/cmd/config/response** (command responses)
+```json
+{
+  "cmd": "get_config",
+  "status": "ok",
+  "mqtt_host": "192.168.0.203",
+  "mqtt_port": 1883,
+  "mqtt_user": "admin",
+  "wallbox_topic": "wallbox",
+  "log_level": 2
 }
 ```
 
@@ -172,6 +175,7 @@ Single Core:
 ### 5.1 Correction Logic
 
 **Threshold**: 1000W minimum wallbox power for correction activation
+**Data Max Age**: 30 seconds (wallbox data considered stale after this)
 
 **Calculation**:
 ```
@@ -181,14 +185,13 @@ corrected_power = dtsu_power + wallbox_power
 **Distribution** (when correction applied):
 - Total power corrected by full wallbox power
 - Phase powers distributed evenly (wallbox_power / 3 per phase)
-- Demand values adjusted proportionally
 
 ### 5.2 MODBUS Frame Modification
 
 **Process**:
 1. Read MODBUS response from DTSU-666
 2. Parse IEEE 754 float values
-3. Apply correction if wallbox power > 1000W
+3. Apply correction if wallbox power > 1000W and data is fresh
 4. Write modified values back to frame
 5. Recalculate and update CRC16
 6. Forward to SUN2000
@@ -198,89 +201,86 @@ corrected_power = dtsu_power + wallbox_power
 - Phase L1 power (register 2128)
 - Phase L2 power (register 2130)
 - Phase L3 power (register 2132)
-- Total demand (register 2158)
-- Phase demands (registers 2160, 2162, 2164)
 
 ---
 
-## 6. Debug Output Format
+## 6. Configuration System
 
-### 6.1 Serial/Telnet Output
+### 6.1 NVS Persistent Storage
+
+Configuration is stored in ESP32 NVS (Non-Volatile Storage) and survives reboots.
+
+**Stored Parameters:**
+- MQTT Host (64 chars max)
+- MQTT Port (uint16)
+- MQTT Username (32 chars max)
+- MQTT Password (32 chars max)
+- Wallbox Topic (64 chars max)
+- Log Level (0-3)
+
+### 6.2 Default Values
+
+| Parameter | Default Value |
+|-----------|---------------|
+| MQTT Host | 192.168.0.203 |
+| MQTT Port | 1883 |
+| MQTT User | admin |
+| MQTT Pass | admin |
+| Wallbox Topic | wallbox |
+| Log Level | 2 (WARN) |
+
+### 6.3 Log Levels
+
+| Level | Name | Description |
+|-------|------|-------------|
+| 0 | DEBUG | Verbose debugging info |
+| 1 | INFO | Informational messages |
+| 2 | WARN | Warnings (default) |
+| 3 | ERROR | Errors only |
+
+---
+
+## 7. Debug Output Format
+
+### 7.1 Serial Output
 
 **Single-line format per MODBUS transaction**:
 ```
 DTSU: 94.1W | Wallbox: 0.0W | SUN2000: 94.1W (94.1W + 0.0W)
 ```
 
-**Success-only logging**:
-- No verbose packet dumps
-- MQTT publish failures logged only
-- Internal SUN2000 messages (ID=5) hidden
+**Log format**:
+```
+[timestamp][LEVEL][SUBSYSTEM] message
+```
 
 ---
 
-## 7. Build Configuration
+## 8. Build Configuration
 
-### 7.1 PlatformIO Environments
+### 8.1 PlatformIO Environments
 
-**ESP32-S3**:
-- `esp32-s3-serial`: Serial upload (COM port)
-- `esp32-s3-ota`: OTA wireless upload
-
-**ESP32-C3**:
 - `esp32-c3-serial`: Serial upload (COM port)
 - `esp32-c3-ota`: OTA wireless upload
 
-### 7.2 Build Flags
+### 8.2 Build Flags
 
-**ESP32-S3**:
 ```ini
 build_flags =
     -DARDUINO_USB_CDC_ON_BOOT=1
+    -DARDUINO_USB_MODE=1
     -std=gnu++17
 board_build.usb_cdc = true
-```
-
-**ESP32-C3**:
-```ini
-build_flags =
-    -DARDUINO_USB_CDC_ON_BOOT=0
-    -std=gnu++17
-board_build.usb_cdc = false
 board_build.arduino.memory_type = qio_qspi
 ```
 
-### 7.3 Dependencies
+### 8.3 Dependencies
 - ArduinoJson @ ^6.19.4
 - PubSubClient @ ^2.8
 - ArduinoOTA
-
----
-
-## 8. Configuration Files
-
-### 8.1 credentials.h (User-Specific)
-
-**Note**: This file is gitignored. Copy from `credentials.h.example`
-
-```cpp
-static const char* ssid = "YOUR_WIFI_SSID";
-static const char* password = "YOUR_WIFI_PASSWORD";
-static const char* mqttServer = "192.168.0.203";
-static const char* evccApiUrl = "http://192.168.0.202:7070/api/state";
-```
-
-### 8.2 config.h (Platform-Specific)
-
-**Debug Settings**:
-- `ENABLE_SERIAL_DEBUG`: USB serial debugging (ESP32-S3 only)
-- `ENABLE_TELNET_DEBUG`: Wireless telnet debugging
-
-**Timing Constants**:
-- `CORRECTION_THRESHOLD`: 1000.0f (watts)
-- `HTTP_POLL_INTERVAL`: 10000 (ms)
-- `WATCHDOG_TIMEOUT_MS`: 60000 (ms)
-- `HEALTH_CHECK_INTERVAL`: 5000 (ms)
+- Preferences (NVS)
+- ESPAsyncWebServer (for Web UI)
+- AsyncTCP (ESP32 async TCP library)
 
 ---
 
@@ -288,18 +288,19 @@ static const char* evccApiUrl = "http://192.168.0.202:7070/api/state";
 
 ### 9.1 Task Stack Sizes
 
-| Task | ESP32-S3 | ESP32-C3 |
-|------|----------|----------|
-| Proxy | 4KB | 4KB |
-| MQTT | 16KB | 16KB |
-| Watchdog | 2KB | 2KB |
+| Task | Stack Size |
+|------|------------|
+| Proxy | 4KB |
+| MQTT | 8KB |
+| Watchdog | 2KB |
 
 ### 9.2 Heap Requirements
 
-- **Minimum Free Heap**: 20KB threshold
+- **Minimum Free Heap**: 20KB threshold (warning)
+- **Critical Heap**: 10KB (triggers reboot)
 - **MQTT Buffer**: 1024 bytes
-- **JSON Buffer**: 8192 bytes (StaticJsonDocument)
-- **Typical Free Heap**: ~250KB (ESP32-S3), ~200KB (ESP32-C3)
+- **Log Buffer**: 16 entries circular buffer
+- **Typical Free Heap**: ~200KB
 
 ---
 
@@ -307,23 +308,25 @@ static const char* evccApiUrl = "http://192.168.0.202:7070/api/state";
 
 ### 10.1 Watchdog Monitoring
 
-**Timeouts**:
+**Software Watchdog**:
 - Task heartbeat timeout: 60 seconds
-- MQTT reconnection: Automatic with exponential backoff
-- EVCC API failure: Continue with last valid data
+- Health check interval: 5 seconds
+
+**Hardware Watchdog (ESP32 WDT)**:
+- Timeout: 90 seconds
+- Panic on timeout: enabled
 
 ### 10.2 Auto-Restart Triggers
 
-- Initialization failures (MODBUS, MQTT, EVCC)
-- Watchdog task timeout
-- Critical memory shortage (< 20KB free heap)
+- Task heartbeat timeout (proxy or MQTT task)
+- Critical memory shortage (< 10KB free heap)
+- Hardware watchdog timeout
 
-### 10.3 Error Reporting
+### 10.3 Graceful Degradation
 
-**MQTT Error Messages**:
-- Subsystem identifier (MODBUS, MEMORY, WATCHDOG)
-- Error description
-- Numeric error code
+- **MQTT disconnect**: Continues MODBUS proxy, reconnects automatically
+- **Wallbox data stale**: Disables power correction, logs warning
+- **Low memory warning**: Logs warning at < 20KB free heap
 
 ---
 
@@ -348,7 +351,7 @@ static const char* evccApiUrl = "http://192.168.0.202:7070/api/state";
 
 ### 12.1 WiFi Settings
 
-- **Mode**: Station (STA) mode
+- **Mode**: Station (STA) mode, AP mode for provisioning
 - **Hostname**: "MODBUS-Proxy"
 - **Power Save**: Disabled for stability
 - **Connection Timeout**: 30 seconds
@@ -356,71 +359,357 @@ static const char* evccApiUrl = "http://192.168.0.202:7070/api/state";
 ### 12.2 Services
 
 - **mDNS**: Enabled (MODBUS-Proxy.local)
-- **Telnet**: Port 23 (if enabled)
 - **OTA**: Port 3232
-- **MQTT**: Port 1883
+- **MQTT**: Port 1883 (configurable)
+- **Captive Portal**: Port 80 (AP mode only)
 
 ---
 
-## 13. Performance Characteristics
+## 13. WiFi Provisioning (Captive Portal)
 
-### 13.1 Timing
+### 13.1 Purpose
+
+Allows initial WiFi configuration without reflashing firmware. The captive portal is intentionally difficult to trigger to prevent accidental credential loss during network outages.
+
+### 13.2 Activation Mechanism
+
+**3 Power Cycle Trigger**:
+1. On each boot, increment a "boot counter" in NVS
+2. Attempt WiFi connection with stored credentials
+3. If WiFi connects successfully within 30 seconds, reset boot counter to 0
+4. If boot counter reaches 3 (three consecutive failed boots), enter AP/captive portal mode
+
+**Why 3 Power Cycles?**
+- Prevents accidental portal activation during temporary network outages
+- Device will keep retrying WiFi during outages (counter resets on success)
+- Only intentional "I need to reconfigure" scenarios trigger portal
+- User must deliberately power cycle 3 times to enter config mode
+
+### 13.3 Captive Portal Behavior
+
+**AP Mode Configuration**:
+- **SSID**: "MODBUS-Proxy-Setup"
+- **Password**: None (open network)
+- **IP Address**: 192.168.4.1
+- **DNS**: Captive portal redirect
+
+**Web Interface** (http://192.168.4.1):
+- WiFi SSID selection (scan available networks)
+- WiFi password entry
+- Save and restart button
+
+**Portal Timeout**:
+- 5 minutes of inactivity triggers restart
+- Restart attempts normal WiFi connection
+
+### 13.4 Configuration Scope
+
+The captive portal configures **WiFi credentials only**:
+- WiFi SSID
+- WiFi Password
+
+**NOT configured via captive portal** (configured via Web UI in STA mode):
+- MQTT broker address/port
+- MQTT credentials
+- Wallbox topic
+- Log level
+
+### 13.5 NVS Storage for Provisioning
+
+| Key | Type | Description |
+|-----|------|-------------|
+| boot_count | uint8 | Failed boot counter (0-3) |
+| wifi_ssid | string | WiFi network name (64 chars) |
+| wifi_pass | string | WiFi password (64 chars) |
+| provisioned | bool | WiFi credentials have been set |
+
+---
+
+## 14. Web UI (Status & Configuration)
+
+### 14.1 Purpose
+
+A lightweight web interface accessible when device is connected to WiFi (STA mode). Provides status monitoring and MQTT broker configuration without requiring MQTT connectivity.
+
+### 14.2 Access
+
+- **URL**: http://MODBUS-Proxy.local or http://{device-ip}
+- **Port**: 80
+- **Authentication**: None (local network only)
+
+### 14.3 Status Page (/)
+
+**Real-time Status Display**:
+```
+┌─────────────────────────────────────────────┐
+│  MODBUS Proxy Status                        │
+├─────────────────────────────────────────────┤
+│  WiFi:     Connected (RSSI: -65 dBm)        │
+│  MQTT:     Connected to 192.168.0.203       │
+│  Uptime:   2d 14h 32m                       │
+│  Heap:     184 KB free                      │
+├─────────────────────────────────────────────┤
+│  Power Readings                             │
+│  ├─ DTSU-666:    -18.5 W                    │
+│  ├─ Wallbox:       0.0 W                    │
+│  ├─ SUN2000:     -18.5 W                    │
+│  └─ Correction:  Inactive                   │
+├─────────────────────────────────────────────┤
+│  MODBUS Traffic                             │
+│  ├─ Last RX:     2 seconds ago              │
+│  ├─ Transactions: 12,345                    │
+│  └─ Errors:      0                          │
+├─────────────────────────────────────────────┤
+│  Debug Mode:   [OFF]                        │
+├─────────────────────────────────────────────┤
+│  [Configure]  [Restart]                     │
+└─────────────────────────────────────────────┘
+```
+
+**Auto-refresh**: Every 5 seconds via JavaScript
+
+### 14.4 Configuration Page (/config)
+
+**MQTT Settings**:
+- Broker Host (text input)
+- Broker Port (number input, default 1883)
+- Username (text input)
+- Password (password input)
+- Wallbox Topic (text input)
+- Test Connection button
+- Save button
+
+**Debug Settings**:
+- Debug Mode (toggle: ON/OFF)
+  - When ON: Verbose logging enabled via MQTT topic `MBUS-PROXY/debug`
+  - When OFF: Normal operation (WARN level only)
+
+**Actions**:
+- Save Configuration (saves to NVS, reconnects MQTT)
+- Factory Reset (clears all NVS, restarts)
+- Restart Device
+
+### 14.5 REST API Endpoints
+
+**GET /api/status** - JSON status:
+```json
+{
+  "wifi": {"connected": true, "rssi": -65, "ssid": "private-2G"},
+  "mqtt": {"connected": true, "broker": "192.168.0.203:1883"},
+  "uptime": 123456,
+  "heap": {"free": 184000, "min": 178000},
+  "power": {"dtsu": -18.5, "wallbox": 0.0, "sun2000": -18.5, "active": false},
+  "modbus": {"last_rx": 2, "transactions": 12345, "errors": 0}
+}
+```
+
+**GET /api/config** - Current configuration:
+```json
+{
+  "mqtt_host": "192.168.0.203",
+  "mqtt_port": 1883,
+  "mqtt_user": "admin",
+  "wallbox_topic": "wallbox",
+  "log_level": 2
+}
+```
+
+**POST /api/config** - Update configuration:
+```json
+{
+  "mqtt_host": "192.168.0.100",
+  "mqtt_port": 1883,
+  "mqtt_user": "newuser",
+  "mqtt_pass": "newpass",
+  "wallbox_topic": "evcc/loadpoints/0/chargePower",
+  "log_level": 1
+}
+```
+
+**POST /api/restart** - Restart device
+
+**POST /api/factory-reset** - Factory reset
+
+**POST /api/debug** - Toggle debug mode:
+```json
+{"enabled": true}
+```
+
+### 14.6 Implementation Notes
+
+- Uses ESPAsyncWebServer for non-blocking operation
+- Static HTML/CSS/JS stored in PROGMEM (flash)
+- Minimal footprint (~15KB flash for web assets)
+- Status page auto-refreshes via JavaScript fetch
+
+---
+
+## 15. OTA Debugging
+
+### 15.1 Purpose
+
+Remote debugging capabilities without physical serial connection. All debug output is available via MQTT when enabled.
+
+### 15.2 Debug Levels via MQTT
+
+**Log Level Control** (MQTT command):
+```json
+{"cmd": "set_log_level", "level": 0}
+```
+
+| Level | Name | Output |
+|-------|------|--------|
+| 0 | DEBUG | All messages including MODBUS frames, timing |
+| 1 | INFO | Connection events, config changes |
+| 2 | WARN | Warnings, timeouts (default) |
+| 3 | ERROR | Errors only |
+
+### 15.3 Debug Topics
+
+**MBUS-PROXY/log** - Structured log messages:
+```json
+{
+  "ts": 123456,
+  "level": "DEBUG",
+  "subsys": "MODBUS",
+  "msg": "Frame RX: 0B 03 00 20 00 50 ..."
+}
+```
+
+**MBUS-PROXY/debug** - Verbose debug stream (level 0 only):
+```json
+{
+  "ts": 123456,
+  "type": "modbus_frame",
+  "direction": "rx",
+  "source": "dtsu",
+  "hex": "0B03002000504483",
+  "len": 8
+}
+```
+
+### 15.4 Remote Debug Commands
+
+**Enable verbose frame logging**:
+```json
+{"cmd": "set_log_level", "level": 0}
+```
+
+**Request system state dump**:
+```json
+{"cmd": "debug_dump"}
+```
+
+Response on `MBUS-PROXY/debug/dump`:
+```json
+{
+  "uptime": 123456,
+  "free_heap": 184000,
+  "min_heap": 178000,
+  "wifi_rssi": -65,
+  "mqtt_state": "connected",
+  "boot_count": 0,
+  "last_modbus_rx": 1234,
+  "last_wallbox_rx": 5678,
+  "correction_active": false,
+  "nvs_config": {
+    "mqtt_host": "192.168.0.203",
+    "mqtt_port": 1883,
+    "wallbox_topic": "wallbox"
+  }
+}
+```
+
+**Request config reload**:
+```json
+{"cmd": "reload_config"}
+```
+
+### 15.5 Serial Debug Mirror
+
+When USB serial is connected AND debug level is 0:
+- All MQTT debug output is also sent to serial
+- Allows simultaneous local and remote debugging
+
+---
+
+## 16. Performance Characteristics
+
+### 16.1 Timing
 
 - **MODBUS Response Time**: < 100ms typical
 - **Power Correction Latency**: < 1ms (in-line processing)
 - **MQTT Publish Rate**: Per MODBUS transaction (~1/second)
-- **API Polling**: 10 second interval
+- **Wallbox Data Max Age**: 30 seconds
 
-### 13.2 Resource Usage
+### 16.2 Resource Usage
 
-**ESP32-S3**:
-- **RAM**: 16.5% (54KB / 320KB)
-- **Flash**: 72.4% (949KB / 1.3MB)
-- **CPU**: Dual-core utilization
-
-**ESP32-C3**:
-- **RAM**: 14.8% (48KB / 320KB)
-- **Flash**: 74.5% (977KB / 1.3MB)
+- **RAM**: ~18% (60KB / 320KB) - increased for web server
+- **Flash**: ~70% (920KB / 1.3MB) - increased for web assets
 - **CPU**: Single-core time-sliced
 
 ---
 
-## 14. Testing & Validation
+## 17. Testing & Validation
 
-### 14.1 Functional Tests
+### 17.1 Functional Tests
 
 - ✅ MODBUS proxy passthrough
 - ✅ Power correction calculation
-- ✅ EVCC API polling
+- ✅ MQTT wallbox subscription
 - ✅ MQTT publishing
 - ✅ Watchdog monitoring
 - ✅ Auto-restart recovery
+- ✅ NVS configuration persistence
+- ✅ OTA configuration commands
 
-### 14.2 Stress Tests
+### 17.2 Stress Tests
 
 - ✅ Continuous operation (24+ hours)
 - ✅ Network disconnection recovery
 - ✅ MQTT broker reconnection
-- ✅ EVCC API timeout handling
+- ✅ Wallbox data timeout handling
+
+### 17.3 New Feature Tests
+
+- ⬜ Captive portal activation (3 power cycles)
+- ⬜ Captive portal WiFi configuration
+- ⬜ Boot counter reset on successful WiFi
+- ⬜ Web UI status page display
+- ⬜ Web UI MQTT broker configuration
+- ⬜ Web UI debug mode toggle
+- ⬜ REST API endpoints
+- ⬜ OTA debug output via MQTT
+- ⬜ Debug dump command via MQTT
 
 ---
 
-## 15. Future Enhancements
+## 18. MQTT Configuration Examples
 
-### 15.1 Potential Features
+### 18.1 Change MQTT Broker
 
-- Historical data logging to SD card
-- Web interface for configuration
-- Support for multiple wallboxes
-- Advanced power flow visualization
-- Integration with Home Assistant
+```bash
+mosquitto_pub -h 192.168.0.203 -t "MBUS-PROXY/cmd/config" -m '{"cmd":"set_mqtt","host":"192.168.0.100","port":1883,"user":"myuser","pass":"mypass"}'
+```
 
-### 15.2 Known Limitations
+### 18.2 Set Wallbox Topic for EVCC
 
-- Single DTSU-666 meter support only
-- Fixed EVCC API endpoint
-- No authentication on telnet debug port
-- Limited to 9600 baud MODBUS communication
+```bash
+mosquitto_pub -h 192.168.0.203 -t "MBUS-PROXY/cmd/config" -m '{"cmd":"set_wallbox_topic","topic":"evcc/loadpoints/0/chargePower"}'
+```
+
+### 18.3 Get Current Configuration
+
+```bash
+mosquitto_pub -h 192.168.0.203 -t "MBUS-PROXY/cmd/config" -m '{"cmd":"get_config"}'
+# Response on: MBUS-PROXY/cmd/config/response
+```
+
+### 18.4 Monitor Power Data
+
+```bash
+mosquitto_sub -h 192.168.0.203 -t "MBUS-PROXY/#" -v
+```
 
 ---
 
@@ -433,12 +722,15 @@ See DTSU-666 datasheet for complete register definitions (2102-2181)
 **Common Issues**:
 1. **No MODBUS traffic**: Check GPIO pin assignments, RS485 wiring
 2. **MQTT disconnects**: Verify broker address, check network stability
-3. **Wrong power values**: Verify EVCC API URL and data structure
+3. **Power correction not working**: Check wallbox topic, verify data format
 4. **OTA fails**: Check WiFi signal strength, verify password
+5. **Config not saving**: NVS may be full, try factory_reset command
 
 ---
 
 **Document Version History**:
+- v5.0 (February 2026): Captive portal (3 power cycles), Web UI for status/config, OTA debugging
+- v4.0 (February 2025): MQTT-based wallbox power, NVS config, OTA commands
 - v3.0 (January 2025): Dual-platform support (ESP32-S3/C3), telnet debugging
 - v2.0 (September 2024): MQTT implementation, power correction
 - v1.0 (Initial): Basic MODBUS proxy functionality

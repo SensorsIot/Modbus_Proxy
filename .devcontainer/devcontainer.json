@@ -31,7 +31,7 @@
         }
     },
     "appPort": ["2223:2222"],
-    "postCreateCommand": "git config --global credential.helper store && git config --global core.sshCommand 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' && pip install platformio==6.1.16 && pio pkg install --project-dir Modbus_Proxy && echo 'cd /workspaces/Modbus_Proxy' >> ~/.bashrc",
+    "postCreateCommand": "git config --global credential.helper store && git config --global core.sshCommand 'ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null' && npm install -g @anthropic-ai/claude-code && echo 'alias superclaude=\"claude --dangerously-skip-permissions\"' >> ~/.bashrc && pip install platformio==6.1.16 && pio pkg install --project-dir Modbus_Proxy && echo 'cd /workspaces/Modbus_Proxy' >> ~/.bashrc",
     "workspaceFolder": "/workspaces/Modbus_Proxy",
     "remoteUser": "dev",
     "runArgs": [
@@ -42,9 +42,20 @@
         "source=${localEnv:HOME}/.ssh/authorized_keys,target=/home/dev/.ssh/authorized_keys,type=bind,readonly",
         "source=${localEnv:HOME}/.ssh/id_ed25519,target=/home/dev/.ssh/id_ed25519,type=bind,readonly",
         "source=${localEnv:HOME}/.git-credentials,target=/home/dev/.git-credentials,type=bind,readonly",
-        "source=${localEnv:HOME}/.secrets,target=/home/dev/.secrets,type=bind,readonly"
+        "source=${localEnv:HOME}/.secrets,target=/home/dev/.secrets,type=bind,readonly",
+        "source=${localEnv:HOME}/.claude-containers/${localWorkspaceFolderBasename},target=/home/dev/.claude,type=bind"
     ],
     "containerEnv": {
-        "PLATFORMIO_CORE_DIR": "/home/dev/.platformio"
+        "PLATFORMIO_CORE_DIR": "/home/dev/.platformio",
+        "INFLUXDB_TOKEN": "${localEnv:INFLUXDB_TOKEN}",
+        "INFLUXDB_URL": "${localEnv:INFLUXDB_URL}",
+        "INFLUXDB_ORG": "${localEnv:INFLUXDB_ORG}",
+        "HA_TOKEN": "${localEnv:HA_TOKEN}",
+        "HA_TOKEN_NODERED": "${localEnv:HA_TOKEN_NODERED}",
+        "HA_URL": "${localEnv:HA_URL}",
+        "GRAFANA_URL": "${localEnv:GRAFANA_URL}",
+        "GRAFANA_USER": "${localEnv:GRAFANA_USER}",
+        "GRAFANA_PASSWORD": "${localEnv:GRAFANA_PASSWORD}",
+        "TELEGRAM_BOT_TOKEN": "${localEnv:TELEGRAM_BOT_TOKEN}"
     }
 }

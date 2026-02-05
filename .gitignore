@@ -1,3 +1,6 @@
+.claude/*
+!.claude/skills/
+!.claude/commands/
 # PlatformIO
 .pio/
 .pioenvs/
@@ -33,7 +36,6 @@ lib/
 # Keep .vscode/extensions.json and .vscode/tasks.json for project setup
 
 # Claude Code IDE
-.claude/
 CLAUDE.md
 
 # OS generated files
@@ -90,3 +92,11 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# SSH keys - NEVER commit
+id_rsa*
+id_ed25519*
+id_ecdsa*
+id_dsa*
+*.ppk
+.ssh/
