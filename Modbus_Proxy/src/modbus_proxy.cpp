@@ -1,5 +1,7 @@
 #include "modbus_proxy.h"
 #include "debug.h"
+#include "mqtt_logger.h"
+#include <esp_task_wdt.h>
 
 // Serial interfaces
 // ESP32-C3 only has UART0 and UART1 (UART0 for debug, UART1 for RS485)
@@ -13,7 +15,6 @@ ModbusRTU485 modbusDTU;
 
 // Shared data structures
 SharedDTSUData sharedDTSU = {NULL, false, 0, {}, 0, {}, 0};
-SharedEVCCData sharedEVCC = {NULL, 0.0f, 0, false, 0, 0};
 DTSU666Data dtsu666Data;
 LastRequestInfo g_lastReq;
 
@@ -21,7 +22,6 @@ LastRequestInfo g_lastReq;
 float powerCorrection = 0.0f;
 bool powerCorrectionActive = false;
 uint32_t lastCorrectionTime = 0;
-uint32_t lastHttpPoll = 0;
 
 // Task synchronization
 SemaphoreHandle_t proxyTaskHealthMutex;
@@ -34,19 +34,13 @@ bool initModbusProxy() {
   mqttTaskHealthMutex = xSemaphoreCreateMutex();
 
   if (!proxyTaskHealthMutex || !mqttTaskHealthMutex) {
-    DEBUG_PRINTLN("❌ Failed to create health monitoring mutexes");
+    DEBUG_PRINTLN("Failed to create health monitoring mutexes");
     return false;
   }
 
   sharedDTSU.mutex = xSemaphoreCreateMutex();
   if (!sharedDTSU.mutex) {
-    DEBUG_PRINTLN("❌ Failed to create DTSU data mutex");
-    return false;
-  }
-
-  sharedEVCC.mutex = xSemaphoreCreateMutex();
-  if (!sharedEVCC.mutex) {
-    DEBUG_PRINTLN("❌ Failed to create EVCC data mutex");
+    DEBUG_PRINTLN("Failed to create DTSU data mutex");
     return false;
   }
 
@@ -54,33 +48,33 @@ bool initModbusProxy() {
 }
 
 bool initSerialInterfaces() {
-  DEBUG_PRINTLN("🔧 Initializing RS485 interfaces...");
+  DEBUG_PRINTLN("Initializing RS485 interfaces...");
 
   SerialSUN.begin(MODBUS_BAUDRATE, SERIAL_8N1, RS485_SUN2000_RX_PIN, RS485_SUN2000_TX_PIN);
-  DEBUG_PRINTF("   ✅ SUN2000 interface: UART2, %d baud, pins %d(RX)/%d(TX)\n",
+  DEBUG_PRINTF("   SUN2000 interface: UART2, %d baud, pins %d(RX)/%d(TX)\n",
                 MODBUS_BAUDRATE, RS485_SUN2000_RX_PIN, RS485_SUN2000_TX_PIN);
 
   SerialDTU.begin(MODBUS_BAUDRATE, SERIAL_8N1, RS485_DTU_RX_PIN, RS485_DTU_TX_PIN);
-  DEBUG_PRINTF("   ✅ DTSU-666 interface: UART1, %d baud, pins %d(RX)/%d(TX)\n",
+  DEBUG_PRINTF("   DTSU-666 interface: UART1, %d baud, pins %d(RX)/%d(TX)\n",
                 MODBUS_BAUDRATE, RS485_DTU_RX_PIN, RS485_DTU_TX_PIN);
 
   modbusSUN.begin(SerialSUN, MODBUS_BAUDRATE);
-  DEBUG_PRINTLN("   ✅ SUN2000 MODBUS handler initialized");
+  DEBUG_PRINTLN("   SUN2000 MODBUS handler initialized");
 
   modbusDTU.begin(SerialDTU, MODBUS_BAUDRATE);
-  DEBUG_PRINTLN("   ✅ DTSU-666 MODBUS handler initialized");
+  DEBUG_PRINTLN("   DTSU-666 MODBUS handler initialized");
 
   return true;
 }
 
 
 void proxyTask(void *pvParameters) {
-  DEBUG_PRINTLN("🐌 Simple Proxy Task started - Direct SUN2000 ↔ DTSU proxying");
+  DEBUG_PRINTLN("Simple Proxy Task started - Direct SUN2000 <-> DTSU proxying");
 
   ModbusMessage sunMsg;
   uint32_t proxyCount = 0;
 
-  DEBUG_PRINTLN("\n🔍 MODBUS PROXY DEBUG MODE ACTIVE");
+  DEBUG_PRINTLN("\nMODBUS PROXY DEBUG MODE ACTIVE");
   DEBUG_PRINTF("   SUN2000 interface: RX=GPIO%d, TX=GPIO%d\n", RS485_SUN2000_RX_PIN, RS485_SUN2000_TX_PIN);
   DEBUG_PRINTF("   DTU interface: RX=GPIO%d, TX=GPIO%d\n", RS485_DTU_RX_PIN, RS485_DTU_TX_PIN);
   DEBUG_PRINTLN("   Waiting for MODBUS traffic...\n");
@@ -93,7 +87,7 @@ void proxyTask(void *pvParameters) {
 
     // Periodic status report every 10 seconds
     if (millis() - lastDebugTime > 10000) {
-      DEBUG_PRINTF("⏱️  No MODBUS traffic for %lu seconds (waiting on SUN2000 RX=GPIO%d)\n",
+      DEBUG_PRINTF("No MODBUS traffic for %lu seconds (waiting on SUN2000 RX=GPIO%d)\n",
                    noTrafficCount * 10, RS485_SUN2000_RX_PIN);
       lastDebugTime = millis();
       noTrafficCount++;
@@ -122,14 +116,14 @@ void proxyTask(void *pvParameters) {
             uint32_t dtsuTime = millis() - dtsuStart;
 
             if (dtsuMsg.type == MBType::Exception) {
-              DEBUG_PRINTF("   ❌ DTSU EXCEPTION: Code=0x%02X\n", dtsuMsg.exCode);
+              DEBUG_PRINTF("   DTSU EXCEPTION: Code=0x%02X\n", dtsuMsg.exCode);
               systemHealth.proxyErrors++;
               reportSystemError("MODBUS", "DTSU exception", dtsuMsg.exCode);
             } else if (dtsuMsg.fc == 0x03 && dtsuMsg.len >= 165) {
               DTSU666Data dtsuData;
               if (parseDTSU666Response(dtsuMsg.raw, dtsuMsg.len, dtsuData)) {
                 dtsu666Data = dtsuData;
-                calculatePowerCorrection();
+                calculateProxyPowerCorrection();
 
                 DTSU666Data finalData = dtsuData;
                 bool correctionAppliedSuccessfully = false;
@@ -158,9 +152,7 @@ void proxyTask(void *pvParameters) {
                 queueCorrectedPowerData(finalData, dtsuData, correctionAppliedSuccessfully,
                                       correctionAppliedSuccessfully ? powerCorrection : 0.0f);
 
-                float currentWallboxPower = 0.0f;
-                bool valid = false;
-                getEVCCData(sharedEVCC, currentWallboxPower, valid);
+                float currentWallboxPower = getWallboxPower();
 
                 float sun2000Value = dtsuData.power_total;
                 if (correctionAppliedSuccessfully && powerCorrection > 0) {
@@ -186,17 +178,17 @@ void proxyTask(void *pvParameters) {
             SerialSUN.flush();
 
             if (sunWritten != dtsuMsg.len) {
-              DEBUG_PRINTF("   ❌ Failed to write to SUN2000: %u/%u bytes\n", sunWritten, dtsuMsg.len);
+              DEBUG_PRINTF("   Failed to write to SUN2000: %u/%u bytes\n", sunWritten, dtsuMsg.len);
               systemHealth.proxyErrors++;
               reportSystemError("MODBUS", "SUN2000 write failed", sunWritten);
             }
           } else {
-            DEBUG_PRINTLN("❌ DTSU TIMEOUT");
+            DEBUG_PRINTLN("DTSU TIMEOUT");
             systemHealth.proxyErrors++;
             reportSystemError("MODBUS", "DTSU timeout", 0);
           }
         } else {
-          DEBUG_PRINTLN("❌ DTSU WRITE FAILED");
+          DEBUG_PRINTLN("DTSU WRITE FAILED");
           systemHealth.proxyErrors++;
           reportSystemError("MODBUS", "DTSU write failed", written);
         }
@@ -210,11 +202,11 @@ void proxyTask(void *pvParameters) {
   }
 }
 
-void calculatePowerCorrection() {
+void calculateProxyPowerCorrection() {
   float wallboxPower = 0.0f;
   bool valid = false;
 
-  getEVCCData(sharedEVCC, wallboxPower, valid);
+  getWallboxData(wallboxPower, valid);
 
   if (!valid) {
     powerCorrection = 0.0f;
@@ -230,7 +222,7 @@ void calculatePowerCorrection() {
     systemHealth.powerCorrectionActive = true;
   } else {
     if (powerCorrectionActive) {
-      DEBUG_PRINTF("\n⚡ POWER CORRECTION DEACTIVATED:\n");
+      DEBUG_PRINTF("\nPOWER CORRECTION DEACTIVATED:\n");
       DEBUG_PRINTF("   No significant wallbox charging detected\n");
     }
 
@@ -267,17 +259,22 @@ void updateTaskHealthbeat(bool isProxyTask) {
 
 void performHealthCheck() {
   uint32_t currentTime = millis();
+  bool criticalFailure = false;
 
   if (currentTime - proxyTaskLastSeen > WATCHDOG_TIMEOUT_MS) {
-    DEBUG_PRINTF("🚨 PROXY TASK TIMEOUT: %lu ms since last heartbeat\n",
+    DEBUG_PRINTF("PROXY TASK TIMEOUT: %lu ms since last heartbeat\n",
                   currentTime - proxyTaskLastSeen);
+    MLOG_ERROR("WATCHDOG", "Proxy task timeout (%lums) - triggering reboot", currentTime - proxyTaskLastSeen);
     reportSystemError("WATCHDOG", "Proxy task timeout", currentTime - proxyTaskLastSeen);
+    criticalFailure = true;
   }
 
   if (currentTime - mqttTaskLastSeen > WATCHDOG_TIMEOUT_MS) {
-    DEBUG_PRINTF("🚨 MQTT TASK TIMEOUT: %lu ms since last heartbeat\n",
+    DEBUG_PRINTF("MQTT TASK TIMEOUT: %lu ms since last heartbeat\n",
                   currentTime - mqttTaskLastSeen);
+    MLOG_ERROR("WATCHDOG", "MQTT task timeout (%lums) - triggering reboot", currentTime - mqttTaskLastSeen);
     reportSystemError("WATCHDOG", "MQTT task timeout", currentTime - mqttTaskLastSeen);
+    criticalFailure = true;
   }
 
   systemHealth.uptime = currentTime;
@@ -285,14 +282,28 @@ void performHealthCheck() {
   systemHealth.minFreeHeap = ESP.getMinFreeHeap();
 
   if (systemHealth.freeHeap < MIN_FREE_HEAP) {
-    DEBUG_PRINTF("🚨 LOW MEMORY WARNING: %lu bytes free (threshold: %lu)\n",
+    DEBUG_PRINTF("LOW MEMORY WARNING: %lu bytes free (threshold: %lu)\n",
                   systemHealth.freeHeap, MIN_FREE_HEAP);
+    MLOG_WARN("MEMORY", "Low heap: %lu bytes (threshold: %lu)", systemHealth.freeHeap, MIN_FREE_HEAP);
     reportSystemError("MEMORY", "Low heap memory", systemHealth.freeHeap);
+  }
+
+  // Critical memory threshold - reboot if heap is critically low
+  if (systemHealth.freeHeap < (MIN_FREE_HEAP / 2)) {
+    MLOG_ERROR("MEMORY", "Critical heap: %lu bytes - triggering reboot", systemHealth.freeHeap);
+    criticalFailure = true;
+  }
+
+  // Trigger reboot on critical failure
+  if (criticalFailure) {
+    DEBUG_PRINTLN("!!! CRITICAL FAILURE DETECTED - REBOOTING IN 2 SECONDS !!!");
+    delay(2000);  // Allow time for log message to be sent
+    ESP.restart();
   }
 }
 
 void reportSystemError(const char* subsystem, const char* error, int code) {
-  DEBUG_PRINTF("🚨 SYSTEM ERROR [%s]: %s", subsystem, error);
+  DEBUG_PRINTF("SYSTEM ERROR [%s]: %s", subsystem, error);
   if (code != 0) {
     DEBUG_PRINTF(" (code: %d)", code);
   }
@@ -301,10 +312,19 @@ void reportSystemError(const char* subsystem, const char* error, int code) {
 
 void watchdogTask(void *pvParameters) {
   (void)pvParameters;
-  DEBUG_PRINTLN("🐕 Watchdog Task started - Independent system health monitoring");
-  DEBUG_PRINTF("🐕 Running on Core %d with priority %d\n", xPortGetCoreID(), uxTaskPriorityGet(NULL));
+  DEBUG_PRINTLN("Watchdog Task started - Independent system health monitoring");
+  DEBUG_PRINTF("Running on Core %d with priority %d\n", xPortGetCoreID(), uxTaskPriorityGet(NULL));
+
+  // Initialize hardware watchdog timer (90 second timeout)
+  // This is a safety net in case the watchdog task itself hangs
+  esp_task_wdt_init(90, true);  // 90 second timeout, panic on timeout
+  esp_task_wdt_add(NULL);  // Add current task to watchdog
+  MLOG_INFO("WATCHDOG", "Hardware WDT initialized (90s timeout)");
 
   while (true) {
+    // Feed the hardware watchdog
+    esp_task_wdt_reset();
+
     performHealthCheck();
     vTaskDelay(pdMS_TO_TICKS(HEALTH_CHECK_INTERVAL));
   }

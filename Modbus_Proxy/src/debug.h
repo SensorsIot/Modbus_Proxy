@@ -12,3 +12,6 @@
   #define DEBUG_PRINTLN(x)
   #define DEBUG_PRINTF(...)
 #endif
+
+// Include MQTT logger for MLOG macros
+#include "mqtt_logger.h"

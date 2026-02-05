@@ -5,7 +5,7 @@
 #include "ModbusRTU485.h"
 #include "config.h"
 #include "dtsu666.h"
-#include "evcc_api.h"
+#include "wallbox_data.h"
 #include "mqtt_handler.h"
 
 // FreeRTOS task declarations
@@ -22,7 +22,7 @@ bool processMessage(const ModbusMessage& msg, bool fromSUN2000);
 void forwardMessage(const uint8_t* data, size_t len, bool toSUN2000);
 
 // Power correction functions
-void calculatePowerCorrection();
+void calculateProxyPowerCorrection();
 bool shouldApplyCorrection(float wallboxPower);
 void updateSharedData(const uint8_t* responseData, uint16_t responseLen, const DTSU666Data& parsedData);
 
@@ -51,7 +51,6 @@ extern ModbusRTU485 modbusDTU;
 
 // Shared data structures
 extern SharedDTSUData sharedDTSU;
-extern SharedEVCCData sharedEVCC;
 extern DTSU666Data dtsu666Data;
 extern LastRequestInfo g_lastReq;
 
@@ -59,4 +58,3 @@ extern LastRequestInfo g_lastReq;
 extern float powerCorrection;
 extern bool powerCorrectionActive;
 extern uint32_t lastCorrectionTime;
-extern uint32_t lastHttpPoll;

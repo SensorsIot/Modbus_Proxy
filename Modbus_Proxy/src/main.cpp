@@ -14,9 +14,11 @@
 #include "config.h"
 #include "debug.h"
 #include "dtsu666.h"
-#include "evcc_api.h"
+#include "wallbox_data.h"
 #include "mqtt_handler.h"
 #include "modbus_proxy.h"
+#include "nvs_config.h"
+#include "mqtt_logger.h"
 #include <ArduinoOTA.h>
 
 // Global variable definitions are in credentials.h
@@ -35,7 +37,7 @@ void setupWiFi() {
   WiFi.setSleep(false);
   WiFi.mode(WIFI_STA);
 
-  DEBUG_PRINTF("📡 Connecting to WiFi SSID: %s\n", ssid);
+  DEBUG_PRINTF("Connecting to WiFi SSID: %s\n", ssid);
   WiFi.setHostname("MODBUS-Proxy");
   int status = WiFi.begin(ssid, password);
   DEBUG_PRINTF("WiFi.begin() returned: %d\n", status);
@@ -47,7 +49,7 @@ void setupWiFi() {
   while (WiFi.status() != WL_CONNECTED) {
     if (millis() - startTime > WIFI_TIMEOUT) {
       DEBUG_PRINTLN();
-      DEBUG_PRINTF("❌ WiFi connection timeout - Final status: %d\n", WiFi.status());
+      DEBUG_PRINTF("WiFi connection timeout - Final status: %d\n", WiFi.status());
       DEBUG_PRINTLN("Restarting...");
       ESP.restart();
     }
@@ -63,7 +65,7 @@ void setupWiFi() {
 
   DEBUG_PRINTLN();
   DEBUG_PRINTF("WiFi connected! IP address: %s\n", WiFi.localIP().toString().c_str());
-  DEBUG_PRINTLN("✅ WiFi power saving disabled for stability");
+  DEBUG_PRINTLN("WiFi power saving disabled for stability");
 
   // Blink 2 times to indicate WiFi connection success
   for (int i = 0; i < 2; i++) {
@@ -83,23 +85,23 @@ void setupOTA() {
   ArduinoOTA.setPassword("modbus_ota_2023");
 
   ArduinoOTA.onStart([]() {
-    DEBUG_PRINTLN("🔄 OTA Update starting...");
+    DEBUG_PRINTLN("OTA Update starting...");
     LED_ON();
   });
 
   ArduinoOTA.onEnd([]() {
-    DEBUG_PRINTLN("✅ OTA Update completed");
+    DEBUG_PRINTLN("OTA Update completed");
     LED_OFF();
   });
 
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
     int percentage = (progress * 100) / total;
-    DEBUG_PRINTF("📊 OTA Progress: %u%%\n", percentage);
+    DEBUG_PRINTF("OTA Progress: %u%%\n", percentage);
     if ((percentage % 20) < 10) LED_ON(); else LED_OFF();
   });
 
   ArduinoOTA.onError([](ota_error_t error) {
-    DEBUG_PRINTF("❌ OTA Error[%u]: ", error);
+    DEBUG_PRINTF("OTA Error[%u]: ", error);
     if (error == OTA_AUTH_ERROR) DEBUG_PRINTLN("Auth Failed");
     else if (error == OTA_BEGIN_ERROR) DEBUG_PRINTLN("Begin Failed");
     else if (error == OTA_CONNECT_ERROR) DEBUG_PRINTLN("Connect Failed");
@@ -116,7 +118,7 @@ void setupOTA() {
   });
 
   ArduinoOTA.begin();
-  DEBUG_PRINTLN("🔗 Arduino OTA Ready");
+  DEBUG_PRINTLN("Arduino OTA Ready");
 }
 
 void setup() {
@@ -138,20 +140,31 @@ void setup() {
         delay(100);
     }
 
-    DEBUG_PRINTLN("🚀 ESP32-C3 MODBUS PROXY starting...");
-    DEBUG_PRINTF("📅 Build: %s %s\n", __DATE__, __TIME__);
-    DEBUG_PRINTLN("🎯 Mode: Modular ESP32-C3 single-core proxy with configurable GPIO pins");
-    DEBUG_PRINTLN("\n⚙️  Configuration Parameters:");
+    DEBUG_PRINTLN("ESP32-C3 MODBUS PROXY starting...");
+    DEBUG_PRINTF("Build: %s %s\n", __DATE__, __TIME__);
+    DEBUG_PRINTLN("Mode: Modular ESP32-C3 single-core proxy with configurable GPIO pins");
+
+    // Initialize NVS configuration FIRST
+    DEBUG_PRINTLN("\nInitializing NVS configuration...");
+    if (!initNVSConfig()) {
+        DEBUG_PRINTLN("NVS init failed, using defaults");
+    }
+
+    // Initialize MQTT logger
+    initMQTTLogger();
+
+    DEBUG_PRINTLN("\nConfiguration Parameters:");
     DEBUG_PRINTF("   WiFi SSID: '%s'\n", ssid);
-    DEBUG_PRINTF("   WiFi Password: '%s'\n", password);
-    DEBUG_PRINTF("   MQTT Server: %s:%d\n", mqttServer, mqttPort);
-    DEBUG_PRINTF("   EVCC API URL: %s\n", evccApiUrl);
+    DEBUG_PRINTF("   MQTT Server: %s:%d\n", mqttConfig.host, mqttConfig.port);
+    DEBUG_PRINTF("   MQTT User: %s\n", mqttConfig.user);
+    DEBUG_PRINTF("   Wallbox Topic: %s\n", mqttConfig.wallboxTopic);
+    DEBUG_PRINTF("   Log Level: %d\n", mqttConfig.logLevel);
     DEBUG_PRINTF("   RS485 SUN2000: RX=%d, TX=%d\n", RS485_SUN2000_RX_PIN, RS485_SUN2000_TX_PIN);
     DEBUG_PRINTF("   RS485 DTU: RX=%d, TX=%d\n", RS485_DTU_RX_PIN, RS485_DTU_TX_PIN);
     DEBUG_PRINTF("   Status LED: GPIO %d\n", STATUS_LED_PIN);
     DEBUG_PRINTF("   MODBUS Baudrate: %d\n", MODBUS_BAUDRATE);
     DEBUG_PRINTF("   Power Correction Threshold: %.0f W\n", CORRECTION_THRESHOLD);
-    DEBUG_PRINTF("   HTTP Poll Interval: %d ms\n", HTTP_POLL_INTERVAL);
+    DEBUG_PRINTF("   Wallbox Data Max Age: %d ms\n", WALLBOX_DATA_MAX_AGE_MS);
     DEBUG_PRINTF("   Watchdog Timeout: %d ms\n", WATCHDOG_TIMEOUT_MS);
     DEBUG_PRINTF("   Serial Debug: %s\n\n", ENABLE_SERIAL_DEBUG ? "ENABLED" : "DISABLED");
 
@@ -164,32 +177,32 @@ void setup() {
     systemHealth.uptime = currentTime;
     systemHealth.freeHeap = ESP.getFreeHeap();
     systemHealth.minFreeHeap = ESP.getMinFreeHeap();
-    DEBUG_PRINTLN("🏥 System health monitoring initialized");
+    DEBUG_PRINTLN("System health monitoring initialized");
 
     // Initialize MQTT after WiFi
     setupMQTT();
 
     // Initialize modular components
     if (!initModbusProxy()) {
-        DEBUG_PRINTLN("❌ Failed to initialize MODBUS proxy");
+        DEBUG_PRINTLN("Failed to initialize MODBUS proxy");
         ESP.restart();
     }
 
-    if (!initEVCCAPI()) {
-        DEBUG_PRINTLN("❌ Failed to initialize EVCC API");
+    if (!initWallboxData()) {
+        DEBUG_PRINTLN("Failed to initialize wallbox data");
         ESP.restart();
     }
 
-    // Create MQTT task (lowest priority) - increased stack for EVCC API + JSON
+    // Create MQTT task (lowest priority) - handles MQTT and wallbox subscriptions
     xTaskCreate(
         mqttTask,
         "MQTTTask",
-        16384, // Increased to 16KB for HTTP + large JSON buffer
+        8192,
         NULL,
         1,
         NULL
     );
-    DEBUG_PRINTLN("   ✅ MQTT task created (Priority 1)");
+    DEBUG_PRINTLN("   MQTT task created (Priority 1)");
 
     // Create proxy task (medium priority)
     xTaskCreate(
@@ -200,7 +213,7 @@ void setup() {
         2,
         NULL
     );
-    DEBUG_PRINTLN("   ✅ Proxy task created (Priority 2)");
+    DEBUG_PRINTLN("   Proxy task created (Priority 2)");
 
     // Create watchdog task (highest priority)
     xTaskCreate(
@@ -211,13 +224,13 @@ void setup() {
         3,
         NULL
     );
-    DEBUG_PRINTLN("   ✅ Watchdog task created (Priority 3)");
+    DEBUG_PRINTLN("   Watchdog task created (Priority 3)");
 
-    DEBUG_PRINTLN("🔗 Modular ESP32-C3 proxy initialized!");
-    DEBUG_PRINTLN("   📡 MQTT publishing and EVCC API polling");
-    DEBUG_PRINTLN("   🔄 MODBUS proxy with power correction");
-    DEBUG_PRINTLN("   🐕 Independent health monitoring");
-    DEBUG_PRINTLN("⚡ Ready for operations!");
+    DEBUG_PRINTLN("Modular ESP32-C3 proxy initialized!");
+    DEBUG_PRINTLN("   MQTT publishing and wallbox subscription");
+    DEBUG_PRINTLN("   MODBUS proxy with power correction");
+    DEBUG_PRINTLN("   Independent health monitoring");
+    DEBUG_PRINTLN("Ready for operations!");
 
     // Phase 4: Setup complete - Blink 5 times
     for (int i = 0; i < 5; i++) {

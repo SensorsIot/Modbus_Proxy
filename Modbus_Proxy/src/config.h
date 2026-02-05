@@ -82,9 +82,8 @@
 // Power correction settings
 const float CORRECTION_THRESHOLD = 1000.0f;
 
-// EVCC API settings
-const uint32_t HTTP_POLL_INTERVAL = 10000;
-const uint32_t EVCC_DATA_MAX_AGE_MS = 10000;
+// Wallbox data settings (received via MQTT)
+const uint32_t WALLBOX_DATA_MAX_AGE_MS = 30000;
 
 // Task timing constants
 const uint32_t WATCHDOG_TIMEOUT_MS = 60000;
@@ -94,9 +93,6 @@ const uint32_t MQTT_PUBLISH_INTERVAL = 1000;
 // Memory thresholds
 const uint32_t MIN_FREE_HEAP = 20000;
 
-// MQTT settings
-const int mqttPort = 1883;
-
 // MQTT topics - hierarchical structure under MBUS-PROXY
 #define MQTT_TOPIC_ROOT "MBUS-PROXY"
 #define MQTT_TOPIC_POWER MQTT_TOPIC_ROOT "/power"
@@ -104,3 +100,6 @@ const int mqttPort = 1883;
 #define MQTT_TOPIC_STATUS MQTT_TOPIC_ROOT "/status"
 #define MQTT_TOPIC_DTSU MQTT_TOPIC_ROOT "/dtsu"
 #define MQTT_TOPIC_DEBUG MQTT_TOPIC_ROOT "/debug"
+#define MQTT_TOPIC_LOG MQTT_TOPIC_ROOT "/log"
+#define MQTT_TOPIC_CMD_CONFIG MQTT_TOPIC_ROOT "/cmd/config"
+#define MQTT_TOPIC_CMD_RESPONSE MQTT_TOPIC_ROOT "/cmd/config/response"

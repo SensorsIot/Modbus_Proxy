@@ -60,8 +60,8 @@ struct SystemHealth {
   uint32_t minFreeHeap;
   uint32_t mqttReconnects;
   uint32_t dtsuUpdates;
-  uint32_t evccUpdates;
-  uint32_t evccErrors;
+  uint32_t wallboxUpdates;
+  uint32_t wallboxErrors;
   uint32_t proxyErrors;
   float lastPowerCorrection;
   bool powerCorrectionActive;
@@ -74,12 +74,21 @@ bool connectToMQTT();
 void mqttTask(void *pvParameters);
 void onMqttMessage(char* topic, byte* payload, unsigned int length);
 
+// Topic subscription and message handling
+void subscribeToTopics();
+void handleWallboxPower(byte* payload, unsigned int length);
+void handleConfigCommand(byte* payload, unsigned int length);
+void triggerMqttReconnect();
+
 // Data publishing functions
 bool publishDTSUData(const DTSU666Data& data);
 bool publishSystemHealth(const SystemHealth& health);
 bool publishPowerData(const DTSU666Data& dtsuData, float correction, bool correctionActive);
 void queueCorrectedPowerData(const DTSU666Data& finalData, const DTSU666Data& originalData,
                             bool correctionApplied, float correction);
+
+// Log queue processing
+void processLogQueue();
 
 // MQTT utilities
 bool mqttPublish(const char* topic, const char* payload, bool retained = false);
@@ -98,3 +107,4 @@ extern PubSubClient mqttClient;
 extern MQTTDataQueue mqttDataQueue;
 extern SystemHealth systemHealth;
 extern uint32_t mqttReconnectCount;
+extern bool mqttReconnectRequested;
