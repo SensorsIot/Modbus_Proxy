@@ -3,9 +3,9 @@
 // Firmware version
 #define FW_VERSION "1.1.0"
 
-// Debug settings
-#ifndef ENABLE_SERIAL_DEBUG
-#define ENABLE_SERIAL_DEBUG true
+// Serial debug level: 0=OFF, 1=INFO, 2=DEBUG
+#ifndef SERIAL_DEBUG_LEVEL
+#define SERIAL_DEBUG_LEVEL 2
 #endif
 
 // ESP32-C3 Pin definitions - safe GPIOs for UART

@@ -1,5 +1,6 @@
 #include "mqtt_logger.h"
 #include "config.h"
+#include "debug.h"
 #include <stdarg.h>
 
 // Log level names
@@ -20,12 +21,12 @@ bool mqttLoggerConnected = false;
 void initMQTTLogger() {
   logMutex = xSemaphoreCreateMutex();
   if (logMutex == NULL) {
-    Serial.println("Failed to create log mutex");
+    DEBUG_PRINTLN("Failed to create log mutex");
   }
   logHead = 0;
   logTail = 0;
   logCount = 0;
-  Serial.println("MQTT Logger initialized");
+  DEBUG_PRINTLN("MQTT Logger initialized");
 }
 
 void logMessage(uint8_t level, const char* subsystem, const char* format, ...) {
@@ -36,8 +37,17 @@ void logMessage(uint8_t level, const char* subsystem, const char* format, ...) {
   vsnprintf(buffer, sizeof(buffer), format, args);
   va_end(args);
 
-  // Serial output with timestamp and level
+  // Serial output gated by SERIAL_DEBUG_LEVEL:
+  //   Level 0 (OFF):   no serial output
+  //   Level 1 (INFO):  INFO, WARN, ERROR to serial
+  //   Level 2 (DEBUG): all messages to serial
+#if SERIAL_DEBUG_LEVEL >= 2
   Serial.printf("[%lu][%s][%s] %s\n", millis(), LOG_LEVEL_NAMES[level], subsystem, buffer);
+#elif SERIAL_DEBUG_LEVEL == 1
+  if (level >= LOG_LEVEL_INFO) {
+    Serial.printf("[%lu][%s][%s] %s\n", millis(), LOG_LEVEL_NAMES[level], subsystem, buffer);
+  }
+#endif
 
   // Check debug mode - if enabled, always queue DEBUG level messages
   bool debugModeEnabled = isDebugModeEnabled();

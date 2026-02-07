@@ -4,10 +4,10 @@
 
 | Field | Value |
 |-------|-------|
-| Version | 1.5 |
+| Version | 1.8 |
 | Status | Draft |
 | Created | 2026-02-05 |
-| Related | OCPP-Server FSD v1.3 |
+| Related | Modbus-Proxy FSD v5.3 |
 
 ## 1. Overview
 
@@ -46,7 +46,7 @@ This document specifies test cases for the Modbus_Proxy firmware, which acts as 
 
 ### 1.3 Test Suite at a Glance
 
-The project has **168 automated tests** (run without human intervention) and **47 manual tests** (require a human or physical hardware). Together they verify that the proxy reads meter data correctly, adjusts it for wallbox charging, survives network failures, and can be configured remotely.
+The project has **168 automated tests** (run without human intervention) and **48 verification tests** (43 automatable, 5 manual). Together they verify that the proxy reads meter data correctly, adjusts it for wallbox charging, survives network failures, and can be configured remotely.
 
 #### Automated Tests — 168 total
 
@@ -66,22 +66,25 @@ Run on every code change to catch regressions immediately.
 
 **How to run:**
 ```
-pio test -e native                    # 77 unit tests (no hardware, seconds)
+pio test -e unit-test                 # 77 unit tests (no hardware, seconds)
 pytest test/integration/ -v           # 58 integration tests (needs live device)
 pytest test/wifi/ -v                  # 33 WiFi tests (needs WiFi Tester hardware)
 pytest test/wifi/ -m "not captive_portal"  # WiFi tests without slow portal tests
 ```
 
-#### Manual Tests — 47 total
+#### Verification Tests — 48 total
 
-Require a human operator, physical hardware, or long observation periods.
+These tests verify the running device via external interfaces. **43 can be fully automated** using pytest with MQTT, HTTP, RFC2217 serial, and the WiFi Tester. Only **5 require manual intervention** (marked below).
 
-| Category | Tests | What it proves in plain English |
-|----------|------:|--------------------------------|
-| **Startup & Basic Operation** (TC-100 to TC-109) | 10 | The device boots, connects to WiFi and MQTT, and processes wallbox data and configuration commands. |
-| **Resilience & Edge Cases** (EC-100 to EC-116) | 17 | The device recovers gracefully from network outages, corrupted messages, memory pressure, and unexpected conditions — it doesn't just work, it keeps working. |
-| **Web Interface & Captive Portal** (WEB-100 to CP-103) | 14 | The dashboard shows correct live data, settings can be changed through the browser, and a new device can be set up via the WiFi portal without any tools. |
-| **Long-Duration Stability** (LD-001 to LD-006) | 6 | The device runs reliably for days to weeks without memory leaks, crashes, or false alarms. |
+| Category | Tests | Auto | Manual | Tools needed |
+|----------|------:|-----:|-------:|-------------|
+| **Standard Tests** (TC-100 to TC-110) | 11 | 11 | 0 | pytest, paho-mqtt, requests |
+| **Edge Cases** (EC-100 to EC-116) | 17 | 14 | 3 | pytest, paho-mqtt, requests, pyserial (RFC2217), WiFi Tester, SSH |
+| **Web UI** (WEB-100 to WEB-109) | 10 | 8 | 2 | pytest, requests |
+| **Captive Portal** (CP-100 to CP-103) | 4 | 4 | 0 | pytest, pyserial (RFC2217), WiFi Tester |
+| **Long Duration** (LD-001 to LD-006) | 6 | 6 | 0 | pytest, paho-mqtt, requests |
+
+**Manual-only tests:** EC-113 / EC-114 / EC-115 (require test firmware with deliberate hang/allocation), WEB-101 (CSS color needs browser), WEB-109 (mDNS is OS-dependent).
 
 ## 2. Test Environment
 
@@ -90,9 +93,57 @@ Require a human operator, physical hardware, or long observation periods.
 | Component | Description |
 |-----------|-------------|
 | ESP32-C3 DevKit | Device Under Test (DUT) |
-| USB-Serial | For flashing and log monitoring |
+| Serial Portal Pi | RFC2217 serial server at 192.168.0.87 ([Serial Portal](https://github.com/SensorsIot/Serial-via-Ethernet)) |
+| WiFi Tester | Pi Zero W with hostapd/dnsmasq, HTTP-controlled AP at 192.168.0.87:8080 |
 | MQTT Broker | Mosquitto on 192.168.0.203:1883 |
 | WiFi Network | 2.4GHz network with internet |
+
+### 2.1.1 Infrastructure Rules
+
+The following services are **always-on infrastructure** — tests must NEVER start, stop, or restart them:
+
+| Service | Why |
+|---------|-----|
+| Serial Portal (`rfc2217-portal`) | Provides RFC2217 serial access to all slots. Stopping it kills serial access for all devices, not just the DUT. |
+| MQTT Broker (`mosquitto`) | Shared service; only EC-100/EC-110/LD-006 may stop/start it as part of their specific disconnect tests. |
+
+**Tests are consumers of infrastructure, not managers of it.** If a test needs the portal or broker in a specific state, it is a precondition — not a test step.
+
+### 2.1.2 DUT Initial State
+
+The DUT always starts the test suite in a **well-defined clean state**:
+
+- **NVS is empty** — no saved WiFi credentials, no custom MQTT config, no debug mode, boot count = 0
+- **WiFi credentials erased** — no NVS-stored SSID/password; device falls back to `credentials.h` (`private-2G`)
+- **Firmware is freshly flashed** — bootloader + partitions + application at correct offsets
+- **Device has just booted** — first boot after NVS erase, connected to fallback WiFi, MQTT using compiled defaults
+
+This state is established by the test harness before any test runs (see Section 2.6). Individual tests must not assume any prior test has run. If a test modifies NVS (e.g. changes MQTT config), it must restore defaults in teardown or the harness must re-flash before the next test group.
+
+**How to reach the clean state:**
+
+```bash
+# Erase NVS partition (0x9000, 20K) — wipes WiFi creds, MQTT config, boot counter, debug mode
+python3 esptool.py --port "rfc2217://192.168.0.87:4001" --chip esp32c3 \
+    --baud 921600 erase_region 0x9000 0x5000
+
+# Device resets automatically after erase. On first boot with empty NVS:
+#   - WiFi: falls back to credentials.h (private-2G)
+#   - MQTT: uses compiled defaults (192.168.0.203:1883)
+#   - Boot count: 0
+#   - Debug mode: off
+```
+
+**Partition layout (for reference):**
+
+| Partition | Offset | Size | Notes |
+|-----------|--------|------|-------|
+| nvs | 0x9000 | 20K | WiFi creds, MQTT config, boot counter, debug flag |
+| otadata | 0xE000 | 8K | OTA boot selection |
+| app0 | 0x10000 | 1280K | Primary application |
+| app1 | 0x150000 | 1280K | OTA update slot |
+| spiffs | 0x290000 | 1408K | Unused |
+| coredump | 0x3F0000 | 64K | Crash dump |
 
 ### 2.2 Test Tools
 
@@ -100,12 +151,14 @@ Require a human operator, physical hardware, or long observation periods.
 |------|---------|
 | mosquitto_pub/sub | MQTT message injection and monitoring |
 | PlatformIO | Firmware build and flash |
-| PlatformIO native | Host-side unit test runner (`pio test -e native`) |
-| Unity (C) | Unit test framework for native tests |
+| PlatformIO unit-test | Host-side unit test runner (`pio test -e unit-test`) |
+| Unity (C) | Unit test framework for unit tests |
 | pytest | Python integration test framework |
 | paho-mqtt | Python MQTT client for integration tests |
-| Serial Monitor | Debug log capture |
-| Python scripts | Automated test sequences |
+| requests | Python HTTP client for REST API and OTA tests |
+| pyserial (RFC2217) | Remote serial control via `rfc2217://192.168.0.87:4003` for device reset/power cycle |
+| WiFi Tester driver | HTTP-controlled AP: start/stop AP, scan, HTTP relay, station events |
+| SSH (subprocess) | Remote broker restart (`systemctl stop/start mosquitto`) for disconnect tests |
 
 ### 2.3 MQTT Topics
 
@@ -120,7 +173,7 @@ Require a human operator, physical hardware, or long observation periods.
 
 ### 2.4 Automated Test Coverage
 
-#### Unit Tests (native, no hardware required)
+#### Unit Tests (unit-test env, no hardware required)
 
 | Test File | Tests | Source Under Test |
 |-----------|-------|-------------------|
@@ -130,7 +183,7 @@ Require a human operator, physical hardware, or long observation periods.
 | `test_dtsu_parsing` | 15 | `dtsu666.cpp` — parseDTSU666Data, encodeDTSU666Response, parseDTSU666Response |
 | `test_config_defaults` | 12 | `nvs_config.cpp` — getDefaultConfig, constants |
 
-**Run:** `cd Modbus_Proxy && pio test -e native`
+**Run:** `cd Modbus_Proxy && pio test -e unit-test`
 
 #### Integration Tests (Python, requires live device)
 
@@ -175,9 +228,72 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 
 **Security:** Returns HTTP 403 when debug mode is disabled. Not compiled out — the guard is a runtime check, keeping the binary identical for test and production.
 
-## 3. Standard Test Cases
+## 3. Test Cases
 
-### 3.1 TC-100: Basic Startup
+### 3.0 Setup Test Cases
+
+These run first, in order, to establish and verify the clean DUT state before any functional tests.
+
+#### 3.0.1 TC-000: Flash Firmware and Erase NVS
+
+**Precondition:** Firmware built with `esp32-c3-debug` environment (`SERIAL_DEBUG_LEVEL=2`). This ensures maximum serial output for observing boot behaviour.
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Build firmware: `pio run -e esp32-c3-debug` | Build succeeds |
+| 2 | Flash bootloader + partitions + application via esptool | "Hash of data verified" for each |
+| 3 | Erase NVS region (0x9000, 0x5000) | "Erase completed successfully" |
+| 4 | Hard reset via RTS | DUT reboots into application |
+| 5 | Monitor serial output | Boot messages visible: `boot:0xc (SPI_FAST_FLASH_BOOT)`, `ESP32-C3 MODBUS PROXY starting...` |
+
+**Pass Criteria**: All flash/erase operations succeed, DUT resets into normal boot (not download mode), serial output confirms application is running.
+
+**Automation:** esptool via `rfc2217://192.168.0.87:4001`. Flash bootloader.bin, partitions.bin, firmware.bin at correct offsets. Erase NVS. Verify boot via serial.
+
+```bash
+ESPTOOL="python3 ~/.platformio/packages/tool-esptoolpy/esptool.py"
+PORT="rfc2217://192.168.0.87:4001"
+BUILD=".pio/build/esp32-c3-debug"
+
+# Build
+cd Modbus_Proxy && pio run -e esp32-c3-debug
+
+# Flash
+$ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
+    write_flash --flash_mode dio --flash_size 4MB \
+    0x0000 $BUILD/bootloader.bin \
+    0x8000 $BUILD/partitions.bin \
+    0x10000 $BUILD/firmware.bin
+
+# Erase NVS
+$ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
+    erase_region 0x9000 0x5000
+```
+
+#### 3.0.2 TC-001: Verify Clean State
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Wait for DUT to boot (max 15s) | DUT connects to fallback WiFi (`private-2G`) |
+| 2 | GET /api/status | 200 OK, JSON response |
+| 3 | Check `wifi_ssid` | `private-2G` (credentials.h fallback) |
+| 4 | Check `mqtt_connected` | `true` (default broker 192.168.0.203:1883) |
+| 5 | Check `debug_mode` | `false` |
+| 6 | Check `fw_version` | Matches FW_VERSION in config.h |
+| 7 | Check `uptime` | < 30 (freshly booted) |
+| 8 | Check `free_heap` | > MIN_FREE_HEAP (20000) |
+| 9 | Send `get_config` via MQTT | Response shows all compiled defaults |
+| 10 | Check wallbox_topic | `wallbox` (default) |
+| 11 | Check mqtt_host | `192.168.0.203` (default) |
+| 12 | Check log_level | `1` (INFO, default) |
+
+**Pass Criteria**: All fields match compiled defaults. No NVS-stored overrides active.
+
+**Automation:** pytest, requests, paho-mqtt. Poll /api/status until reachable, validate all fields against known defaults. Publish get_config, verify response matches.
+
+### 3.1 Standard Test Cases
+
+#### 3.1.1 TC-100: Basic Startup
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -188,6 +304,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 | 5 | Subscriptions active | Subscribed to wallbox and config topics |
 
 **Pass Criteria**: Boot completes < 15s, MQTT connected.
+
+**Automation:** pytest, requests, paho-mqtt. Verify /api/status uptime > 0, subscribe to MBUS-PROXY/health.
 
 ### 3.2 TC-101: Wallbox Power via MQTT (Plain Float)
 
@@ -201,6 +319,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 
 **Pass Criteria**: Plain float parsed correctly, correction applied.
 
+**Automation:** pytest, paho-mqtt. Publish float to wallbox topic, subscribe to MBUS-PROXY/power, verify wallbox field.
+
 ### 3.3 TC-102: Wallbox Power via MQTT (JSON power key)
 
 | Step | Action | Expected Result |
@@ -209,6 +329,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 | 2 | Check serial log | "Wallbox power updated: 5000.0W" |
 
 **Pass Criteria**: JSON with "power" key parsed correctly.
+
+**Automation:** pytest, paho-mqtt. Publish {"power":5000}, verify via MBUS-PROXY/power or /api/status.
 
 ### 3.4 TC-103: Wallbox Power via MQTT (JSON chargePower key)
 
@@ -219,6 +341,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 
 **Pass Criteria**: EVCC-compatible JSON parsed correctly.
 
+**Automation:** pytest, paho-mqtt. Publish {"chargePower":7400}, verify via /api/status wallbox_power.
+
 ### 3.5 TC-104: Config Command - get_config
 
 | Step | Action | Expected Result |
@@ -228,6 +352,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 | 3 | Check response JSON | Contains mqtt_host, mqtt_port, mqtt_user, wallbox_topic, log_level |
 
 **Pass Criteria**: Current config returned correctly.
+
+**Automation:** pytest, paho-mqtt. Publish get_config, subscribe to response topic, validate JSON fields.
 
 ### 3.6 TC-105: Config Command - set_wallbox_topic
 
@@ -240,6 +366,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 
 **Pass Criteria**: Topic changed, persisted in NVS.
 
+**Automation:** pytest, paho-mqtt. Publish set_wallbox_topic, publish power to new topic, verify update.
+
 ### 3.7 TC-106: Config Command - set_log_level
 
 | Step | Action | Expected Result |
@@ -251,6 +379,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 
 **Pass Criteria**: Log level controls MQTT log output.
 
+**Automation:** pytest, paho-mqtt. Publish set_log_level, subscribe to MBUS-PROXY/log, verify filtering.
+
 ### 3.8 TC-107: Config Command - set_mqtt
 
 | Step | Action | Expected Result |
@@ -261,6 +391,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 | 4 | MQTT connects to new broker | New connection established |
 
 **Pass Criteria**: MQTT credentials changed, reconnect triggered.
+
+**Automation:** pytest, paho-mqtt, requests. Publish set_mqtt, verify reconnect via /api/status mqtt_reconnects.
 
 ### 3.9 TC-108: Config Command - factory_reset
 
@@ -274,6 +406,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 
 **Pass Criteria**: NVS cleared, defaults applied.
 
+**Automation:** pytest, paho-mqtt, requests. Set non-default config, publish factory_reset, verify defaults via get_config.
+
 ### 3.10 TC-109: Power Correction Threshold
 
 | Step | Action | Expected Result |
@@ -285,6 +419,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 
 **Pass Criteria**: Correction only applied above threshold.
 
+**Automation:** pytest, paho-mqtt. Publish below/above threshold values, check MBUS-PROXY/power active flag.
+
 ### 3.11 TC-110: Wallbox Data Staleness
 
 | Step | Action | Expected Result |
@@ -295,6 +431,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 | 4 | Publish new power value | Data valid again |
 
 **Pass Criteria**: Stale data not used for correction.
+
+**Automation:** pytest, paho-mqtt. Publish wallbox power, sleep 35s, verify correction deactivates via /api/status.
 
 ## 4. Edge Case Tests
 
@@ -312,6 +450,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 
 **Pass Criteria**: Modbus unaffected, logs buffered and recovered.
 
+**Automation:** pytest, paho-mqtt, subprocess (SSH). Stop/start mosquitto on broker via `ssh`, verify log buffer recovery on reconnect.
+
 ### 4.2 EC-101: WiFi Disconnect During Operation
 
 | Step | Action | Expected Result |
@@ -325,6 +465,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 
 **Pass Criteria**: Modbus unaffected, graceful WiFi recovery.
 
+**Automation:** pytest, WiFi Tester (ap_stop/ap_start). Drop AP, wait for staleness timeout, restore, verify recovery via HTTP relay.
+
 ### 4.3 EC-102: Malformed Wallbox Power Message
 
 | Step | Action | Expected Result |
@@ -336,6 +478,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 | 5 | Publish valid power | Correctly parsed |
 
 **Pass Criteria**: Graceful handling, error logged, no crash.
+
+**Automation:** pytest, paho-mqtt, requests. Publish "not_a_number", verify wallbox_errors incremented via /api/status.
 
 ### 4.4 EC-103: Malformed Config Command
 
@@ -350,6 +494,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 
 **Pass Criteria**: All malformed commands handled gracefully.
 
+**Automation:** pytest, paho-mqtt. Publish invalid JSON, missing cmd, unknown cmd — check error responses on response topic.
+
 ### 4.5 EC-104: Oversized MQTT Message
 
 | Step | Action | Expected Result |
@@ -362,6 +508,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 
 **Pass Criteria**: Size limits enforced, no buffer overflow.
 
+**Automation:** pytest, paho-mqtt, requests. Publish 300-byte and 600-byte messages, verify device alive via /api/status.
+
 ### 4.6 EC-105: Rapid Wallbox Power Updates
 
 | Step | Action | Expected Result |
@@ -372,6 +520,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 | 4 | Check heap | No memory leak |
 
 **Pass Criteria**: System stable under rapid updates.
+
+**Automation:** pytest, paho-mqtt, requests. Burst 20 messages in 2s, verify last value and heap stability via /api/status.
 
 ### 4.7 EC-106: Power Cycle Recovery
 
@@ -385,17 +535,21 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 
 **Pass Criteria**: Configuration survives power cycle.
 
+**Automation:** pytest, pyserial (RFC2217). Set custom config via MQTT, toggle DTR on rfc2217://192.168.0.87:4003 to reset, verify NVS preserved via get_config.
+
 ### 4.8 EC-107: OTA Update
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Build new firmware | Different version |
-| 2 | Upload via OTA | `pio run -e esp32-c3-ota -t upload` |
+| 2 | Upload via OTA | HTTP OTA: `curl -X POST http://{ip}/ota -H "Authorization: Bearer modbus_ota_2023" -F "firmware=@.pio/build/esp32-c3-release/firmware.bin"` |
 | 3 | Monitor progress | OTA progress in serial log |
 | 4 | System reboots | New firmware running |
 | 5 | Check NVS config | Configuration preserved |
 
 **Pass Criteria**: OTA succeeds, config preserved.
+
+**Automation:** pytest, requests. POST firmware.bin to /ota with auth header, verify new fw_version via /api/status.
 
 ### 4.9 EC-108: Concurrent MQTT Publish and Subscribe
 
@@ -409,6 +563,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 
 **Pass Criteria**: Both directions functional under load.
 
+**Automation:** pytest, paho-mqtt (threaded). Concurrent publish/subscribe threads, verify all messages processed without timeouts.
+
 ### 4.10 EC-109: MQTT Reconnect with Config Change
 
 | Step | Action | Expected Result |
@@ -420,6 +576,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 | 5 | MQTT connects | Normal operation restored |
 
 **Pass Criteria**: Invalid config doesn't brick device.
+
+**Automation:** pytest, paho-mqtt, requests. Send set_mqtt with invalid host, verify via /api/status, send valid host, verify recovery.
 
 ### 4.11 EC-110: Log Buffer Overflow
 
@@ -433,6 +591,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 
 **Pass Criteria**: Bounded memory usage, no crash.
 
+**Automation:** pytest, paho-mqtt, subprocess (SSH). Stop broker, trigger >16 log events, restart broker, verify most recent 16 logs published.
+
 ### 4.12 EC-111: Empty Wallbox Topic Message
 
 | Step | Action | Expected Result |
@@ -443,6 +603,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 | 4 | System continues | No crash |
 
 **Pass Criteria**: Empty messages handled gracefully.
+
+**Automation:** pytest, paho-mqtt, requests. Publish empty message, verify wallbox_errors incremented via /api/status.
 
 ### 4.13 EC-112: Special Characters in Config
 
@@ -455,6 +617,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 | 5 | Authentication works | MQTT connects |
 
 **Pass Criteria**: Special characters handled in config.
+
+**Automation:** pytest, paho-mqtt. Set topic with "/" chars via set_wallbox_topic, publish to new topic, verify received.
 
 ### 4.14 EC-113: Software Watchdog - Task Timeout Detection
 
@@ -470,7 +634,9 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 
 **Pass Criteria**: Hung task detected within 65s, automatic recovery via reboot.
 
-**Note**: Requires test firmware with deliberate task hang capability, or can be verified by reading watchdog implementation code paths.
+**Automation:** Manual — requires test firmware with deliberate task hang capability. Cannot be triggered via external interfaces.
+
+**Note**: Can alternatively be verified by reading watchdog implementation code paths.
 
 ### 4.15 EC-114: Hardware Watchdog - Watchdog Task Recovery
 
@@ -484,7 +650,9 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 
 **Pass Criteria**: Hardware watchdog provides failsafe recovery if software watchdog itself fails.
 
-**Note**: This is a safety-net test. In normal operation, the software watchdog handles recovery before the hardware WDT triggers.
+**Automation:** Manual — safety-net test; the watchdog task itself must hang, which cannot be triggered externally. Verified by code review.
+
+**Note**: In normal operation, the software watchdog handles recovery before the hardware WDT triggers.
 
 ### 4.16 EC-115: Critical Memory Watchdog
 
@@ -500,6 +668,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 
 **Pass Criteria**: Critical memory exhaustion triggers preventive reboot before crash.
 
+**Automation:** Manual — requires test firmware with deliberate memory allocation to exhaust heap. Cannot be triggered via external interfaces.
+
 ### 4.17 EC-116: Watchdog Survives MQTT Disconnect
 
 | Step | Action | Expected Result |
@@ -513,6 +683,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 | 7 | Health reports resume on MQTT | Watchdog unaffected by MQTT state |
 
 **Pass Criteria**: Watchdog operates independently of MQTT connectivity.
+
+**Automation:** pytest, paho-mqtt, subprocess (SSH), requests. Stop broker 5 min, verify no reboot (uptime increases) via /api/status, restart broker.
 
 ## 5. Web UI & Captive Portal Tests
 
@@ -529,6 +701,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 
 **Pass Criteria**: Page loads, all elements present, auto-refresh working.
 
+**Automation:** pytest, requests. GET /, verify 200 OK, check HTML for nav bar, status dots, power grid elements.
+
 ### 5.2 WEB-101: Dashboard Power Color Coding
 
 | Step | Action | Expected Result |
@@ -538,6 +712,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 | 3 | Publish wallbox power 1500W | Value displays amber (correction active) |
 
 **Pass Criteria**: Color changes match thresholds (0=cyan, >0=green, >1000=amber).
+
+**Automation:** Manual — CSS color verification requires visual browser inspection. Can partially verify CSS class names via requests.
 
 ### 5.3 WEB-102: Status Page System Info
 
@@ -552,6 +728,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 
 **Pass Criteria**: All sections display correct live data.
 
+**Automation:** pytest, requests. GET /status, verify HTML contains System, WiFi, MQTT, MODBUS sections.
+
 ### 5.4 WEB-103: Setup Page - Debug Toggle
 
 | Step | Action | Expected Result |
@@ -563,6 +741,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 | 5 | Restart device | Debug mode persisted in NVS |
 
 **Pass Criteria**: Debug toggle saves to NVS, survives reboot.
+
+**Automation:** pytest, requests. POST /api/debug, verify via GET /api/status debug_mode field, toggle back.
 
 ### 5.5 WEB-104: Setup Page - MQTT Configuration
 
@@ -577,6 +757,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 
 **Pass Criteria**: MQTT config saved, reconnect triggered.
 
+**Automation:** pytest, requests, paho-mqtt. POST /api/config MQTT settings, verify response, check MQTT reconnect.
+
 ### 5.6 WEB-105: Setup Page - Wallbox Topic
 
 | Step | Action | Expected Result |
@@ -587,6 +769,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 | 4 | Verify subscription | MQTT re-subscribes to new topic |
 
 **Pass Criteria**: Topic changed, MQTT subscription updated.
+
+**Automation:** pytest, requests, paho-mqtt. POST /api/config wallbox topic, verify MQTT subscription updated.
 
 ### 5.7 WEB-106: Setup Page - Factory Reset
 
@@ -600,6 +784,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 
 **Pass Criteria**: NVS cleared, all settings return to defaults.
 
+**Automation:** pytest, requests. POST /api/config {"type":"reset"}, wait for reboot, verify defaults via GET /api/config.
+
 ### 5.8 WEB-107: REST API /api/status
 
 | Step | Action | Expected Result |
@@ -609,6 +795,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 | 3 | Compare with serial output | Values consistent |
 
 **Pass Criteria**: All documented fields present with correct types.
+
+**Automation:** pytest, requests. GET /api/status, validate all documented fields present with correct JSON types.
 
 ### 5.9 WEB-108: Restart via Web UI
 
@@ -620,6 +808,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 
 **Pass Criteria**: Clean restart, config preserved.
 
+**Automation:** pytest, requests. POST /api/restart, wait ~15s, verify GET / responds with 200 OK.
+
 ### 5.10 WEB-109: mDNS Hostname
 
 | Step | Action | Expected Result |
@@ -629,6 +819,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 | 3 | Verify mDNS service | HTTP service advertised on port 80 |
 
 **Pass Criteria**: Device reachable via hostname (requires mDNS client on network).
+
+**Automation:** Manual — mDNS resolution is OS/network dependent; not reliably automatable across platforms.
 
 ### 5.11 CP-100: Captive Portal Activation (3 Power Cycles)
 
@@ -641,6 +833,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 | 5 | Portal page displays | WiFi scan and password entry |
 
 **Pass Criteria**: 3 rapid reboots triggers AP mode with captive portal.
+
+**Automation:** pytest, pyserial (RFC2217), WiFi Tester. Three serial DTR resets via rfc2217://192.168.0.87:4003, WiFi Tester scans for "MODBUS-Proxy-Setup" AP, joins it, verifies portal page at 192.168.4.1.
 
 ### 5.12 CP-101: Captive Portal WiFi Configuration
 
@@ -655,6 +849,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 
 **Pass Criteria**: WiFi credentials saved via portal, device connects on restart.
 
+**Automation:** pytest, WiFi Tester (HTTP relay). In portal mode: GET /api/scan, POST /api/wifi with test AP credentials via relay, verify DUT joins new AP.
+
 ### 5.13 CP-102: Captive Portal Timeout
 
 | Step | Action | Expected Result |
@@ -665,6 +861,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 
 **Pass Criteria**: Portal doesn't run indefinitely; 5-minute timeout triggers restart.
 
+**Automation:** pytest, pyserial (RFC2217), WiFi Tester. Trigger portal via 3 resets, wait 5+ minutes, verify DUT restarts (AP disappears, STA reconnects).
+
 ### 5.14 CP-103: Boot Counter Reset on Success
 
 | Step | Action | Expected Result |
@@ -674,6 +872,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 | 3 | Power cycle once more | Boot count = 1 (not 2) |
 
 **Pass Criteria**: Successful WiFi connection resets boot counter, preventing accidental portal activation.
+
+**Automation:** pytest, pyserial (RFC2217), requests. Single DTR reset, verify WiFi connects, reset again, verify boot count = 1 (not 2) via /api/status.
 
 ---
 
@@ -687,6 +887,8 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 | LD-004 | 7 days | Normal usage pattern | < 1 unexpected reset |
 | LD-005 | 24 hours | Watchdog stability | No false watchdog triggers, heap stable |
 | LD-006 | 48 hours | Repeated WiFi/MQTT disconnects | Watchdog does not trigger during normal reconnects |
+
+**Automation (all LD tests):** pytest, paho-mqtt, requests. Long-running scripts with periodic /api/status polling (free_heap, uptime, mqtt_reconnects). LD-001/LD-002: subscribe to MBUS-PROXY/power or /health, verify steady heap. LD-003/LD-005: monitor /api/status uptime (no unexpected resets). LD-004: periodic health checks over 7 days. LD-006: subprocess (SSH) to cycle mosquitto stop/start, WiFi Tester for AP dropout cycles.
 
 ## 7. Test Commands Reference
 
@@ -721,17 +923,22 @@ mosquitto_pub -h 192.168.0.203 -t "MBUS-PROXY/cmd/config" -m '{"cmd": "factory_r
 ### 7.2 Build and Flash Commands
 
 ```bash
-# Build for serial upload
-pio run -e esp32-c3-serial
+# Build environments
+pio run -e esp32-c3-debug        # Max serial debug (level 2)
+pio run -e esp32-c3-release      # Info serial (level 1)
+pio run -e esp32-c3-production   # No serial (level 0)
+pio test -e unit-test            # Run unit tests on host
 
-# Flash via serial
-pio run -e esp32-c3-serial -t upload
+# Flash via serial (esptool, any build)
+python3 esptool.py --chip esp32c3 --port "rfc2217://192.168.0.87:4001" --baud 921600 \
+    write_flash 0x0 .pio/build/esp32-c3-debug/bootloader.bin \
+    0x8000 .pio/build/esp32-c3-debug/partitions.bin \
+    0x10000 .pio/build/esp32-c3-debug/firmware.bin
 
-# Build for OTA
-pio run -e esp32-c3-ota
-
-# Flash via OTA
-pio run -e esp32-c3-ota -t upload
+# Flash via HTTP OTA (any build)
+curl -X POST http://192.168.0.177/ota \
+    -H "Authorization: Bearer modbus_ota_2023" \
+    -F "firmware=@.pio/build/esp32-c3-release/firmware.bin"
 
 # Monitor serial output
 pio device monitor -b 115200
@@ -776,7 +983,7 @@ NOTES
 
 ### 9.1 Unit Test Edge Cases
 
-These edge cases are covered by the native unit tests (no hardware required):
+These edge cases are covered by the unit tests (no hardware required):
 
 #### Float Conversion (`test_float_conversion`)
 - IEEE754 special values: NaN, +infinity, -infinity, subnormal (smallest positive)
@@ -939,7 +1146,9 @@ pytest test/wifi/ -v -m captive_portal
 | 1.0 | 2026-02-05 | Initial specification |
 | 1.1 | 2026-02-05 | Added watchdog test cases (EC-113 to EC-116, LD-005, LD-006) |
 | 1.2 | 2026-02-06 | Added Web UI test cases (WEB-100 to WEB-109), captive portal tests (CP-100 to CP-103), mDNS |
-| 1.3 | 2026-02-06 | Added automated test coverage (Section 2.4), edge cases chapter (Section 9), PlatformIO native + pytest tools |
-| 1.5 | 2026-02-06 | Added test suite overview (Section 1.3) with classification and layman summaries |
+| 1.3 | 2026-02-06 | Added automated test coverage (Section 2.4), edge cases chapter (Section 9), PlatformIO unit-test + pytest tools |
 | 1.4 | 2026-02-06 | Added test injection endpoint (Section 2.5), `test_inject.py` integration tests, removed manual test cross-references |
+| 1.5 | 2026-02-06 | Added test suite overview (Section 1.3) with classification and layman summaries |
 | 1.6 | 2026-02-06 | Added WiFi integration tests (Section 10, WIFI-1xx to WIFI-6xx) using WiFi Tester instrument |
+| 1.7 | 2026-02-07 | Added automation tools to all verification tests (Sections 3–6), updated hardware/tools for Serial Portal and WiFi Tester, corrected test count (48 not 47) |
+| 1.8 | 2026-02-07 | Simplified serial debug to 3 levels (OFF/INFO/DEBUG), renamed build envs to esp32-c3-debug/release/production/unit-test, updated TC-000 to use debug build with serial verification |

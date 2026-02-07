@@ -1,4 +1,5 @@
 #include "nvs_config.h"
+#include "debug.h"
 #include <Preferences.h>
 
 // Global config instance
@@ -23,7 +24,7 @@ void getDefaultConfig(MQTTConfig& config) {
 
 bool initNVSConfig() {
   if (!preferences.begin(NVS_NAMESPACE, false)) {
-    Serial.println("Failed to open NVS namespace");
+    DEBUG_PRINTLN("Failed to open NVS namespace");
     getDefaultConfig(mqttConfig);
     configLoaded = true;
     return false;
@@ -69,7 +70,7 @@ bool loadConfig(MQTTConfig& config) {
 
   preferences.end();
 
-  Serial.printf("NVS Config loaded: MQTT=%s:%d, User=%s, WB Topic=%s, LogLevel=%d\n",
+  DEBUG_PRINTF("NVS Config loaded: MQTT=%s:%d, User=%s, WB Topic=%s, LogLevel=%d\n",
                 config.host, config.port, config.user, config.wallboxTopic, config.logLevel);
 
   return true;
@@ -77,7 +78,7 @@ bool loadConfig(MQTTConfig& config) {
 
 bool saveMQTTCredentials(const char* host, uint16_t port, const char* user, const char* pass) {
   if (!preferences.begin(NVS_NAMESPACE, false)) {
-    Serial.println("Failed to open NVS for writing MQTT credentials");
+    DEBUG_PRINTLN("Failed to open NVS for writing MQTT credentials");
     return false;
   }
 
@@ -109,7 +110,7 @@ bool saveMQTTCredentials(const char* host, uint16_t port, const char* user, cons
   preferences.end();
 
   if (success) {
-    Serial.printf("MQTT credentials saved: %s:%d, user=%s\n", mqttConfig.host, mqttConfig.port, mqttConfig.user);
+    DEBUG_PRINTF("MQTT credentials saved: %s:%d, user=%s\n", mqttConfig.host, mqttConfig.port, mqttConfig.user);
   }
 
   return success;
@@ -121,7 +122,7 @@ bool saveWallboxTopic(const char* topic) {
   }
 
   if (!preferences.begin(NVS_NAMESPACE, false)) {
-    Serial.println("Failed to open NVS for writing wallbox topic");
+    DEBUG_PRINTLN("Failed to open NVS for writing wallbox topic");
     return false;
   }
 
@@ -130,7 +131,7 @@ bool saveWallboxTopic(const char* topic) {
   if (success) {
     strncpy(mqttConfig.wallboxTopic, topic, sizeof(mqttConfig.wallboxTopic) - 1);
     mqttConfig.wallboxTopic[sizeof(mqttConfig.wallboxTopic) - 1] = '\0';
-    Serial.printf("Wallbox topic saved: %s\n", mqttConfig.wallboxTopic);
+    DEBUG_PRINTF("Wallbox topic saved: %s\n", mqttConfig.wallboxTopic);
   }
 
   preferences.end();
@@ -143,7 +144,7 @@ bool saveLogLevel(uint8_t level) {
   }
 
   if (!preferences.begin(NVS_NAMESPACE, false)) {
-    Serial.println("Failed to open NVS for writing log level");
+    DEBUG_PRINTLN("Failed to open NVS for writing log level");
     return false;
   }
 
@@ -151,7 +152,7 @@ bool saveLogLevel(uint8_t level) {
 
   if (success) {
     mqttConfig.logLevel = level;
-    Serial.printf("Log level saved: %d\n", mqttConfig.logLevel);
+    DEBUG_PRINTF("Log level saved: %d\n", mqttConfig.logLevel);
   }
 
   preferences.end();
@@ -160,7 +161,7 @@ bool saveLogLevel(uint8_t level) {
 
 bool resetToDefaults() {
   if (!preferences.begin(NVS_NAMESPACE, false)) {
-    Serial.println("Failed to open NVS for clearing");
+    DEBUG_PRINTLN("Failed to open NVS for clearing");
     return false;
   }
 
@@ -169,7 +170,7 @@ bool resetToDefaults() {
 
   if (success) {
     getDefaultConfig(mqttConfig);
-    Serial.println("Config reset to defaults");
+    DEBUG_PRINTLN("Config reset to defaults");
   }
 
   return success;
@@ -187,24 +188,24 @@ uint8_t getBootCount() {
 
 void incrementBootCount() {
   if (!preferences.begin(NVS_NAMESPACE, false)) {
-    Serial.println("Failed to open NVS for boot count increment");
+    DEBUG_PRINTLN("Failed to open NVS for boot count increment");
     return;
   }
   uint8_t count = preferences.getUChar(NVS_KEY_BOOT_COUNT, 0);
   count++;
   preferences.putUChar(NVS_KEY_BOOT_COUNT, count);
   preferences.end();
-  Serial.printf("Boot count incremented to: %d\n", count);
+  DEBUG_PRINTF("Boot count incremented to: %d\n", count);
 }
 
 void resetBootCount() {
   if (!preferences.begin(NVS_NAMESPACE, false)) {
-    Serial.println("Failed to open NVS for boot count reset");
+    DEBUG_PRINTLN("Failed to open NVS for boot count reset");
     return;
   }
   preferences.putUChar(NVS_KEY_BOOT_COUNT, 0);
   preferences.end();
-  Serial.println("Boot count reset to 0");
+  DEBUG_PRINTLN("Boot count reset to 0");
 }
 
 // WiFi credentials functions
@@ -214,7 +215,7 @@ bool saveWiFiCredentials(const char* ssid, const char* pass) {
   }
 
   if (!preferences.begin(NVS_NAMESPACE, false)) {
-    Serial.println("Failed to open NVS for writing WiFi credentials");
+    DEBUG_PRINTLN("Failed to open NVS for writing WiFi credentials");
     return false;
   }
 
@@ -229,7 +230,7 @@ bool saveWiFiCredentials(const char* ssid, const char* pass) {
   preferences.end();
 
   if (success) {
-    Serial.printf("WiFi credentials saved: SSID=%s\n", ssid);
+    DEBUG_PRINTF("WiFi credentials saved: SSID=%s\n", ssid);
   }
 
   return success;
@@ -253,7 +254,7 @@ bool loadWiFiCredentials(char* ssid, size_t ssidLen, char* pass, size_t passLen)
   strncpy(pass, storedPass.c_str(), passLen - 1);
   pass[passLen - 1] = '\0';
 
-  Serial.printf("WiFi credentials loaded: SSID=%s\n", ssid);
+  DEBUG_PRINTF("WiFi credentials loaded: SSID=%s\n", ssid);
   return true;
 }
 
@@ -280,10 +281,10 @@ bool isDebugModeEnabled() {
 
 void setDebugMode(bool enabled) {
   if (!preferences.begin(NVS_NAMESPACE, false)) {
-    Serial.println("Failed to open NVS for debug mode");
+    DEBUG_PRINTLN("Failed to open NVS for debug mode");
     return;
   }
   preferences.putBool(NVS_KEY_DEBUG_MODE, enabled);
   preferences.end();
-  Serial.printf("Debug mode %s\n", enabled ? "enabled" : "disabled");
+  DEBUG_PRINTF("Debug mode %s\n", enabled ? "enabled" : "disabled");
 }

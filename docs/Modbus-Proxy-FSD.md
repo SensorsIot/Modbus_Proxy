@@ -270,15 +270,34 @@ DTSU: 94.1W | Wallbox: 0.0W | SUN2000: 94.1W (94.1W + 0.0W)
 
 ### 8.1 PlatformIO Environments
 
-- `esp32-c3-serial`: Serial upload (COM port)
-- `esp32-c3-ota`: OTA wireless upload
+| Environment | Purpose | Serial Debug Level |
+|-------------|---------|-------------------|
+| `esp32-c3-debug` | Development & testing | 2 (DEBUG) — all output |
+| `esp32-c3-release` | Field deployment with monitoring | 1 (INFO) — important messages |
+| `esp32-c3-production` | Final deployment | 0 (OFF) — silent |
+| `unit-test` | Unit tests on host (no hardware) | 2 (DEBUG) |
 
-### 8.2 Build Flags
+All ESP32 builds can be flashed via serial (esptool) or HTTP OTA (curl). The upload method is independent of the build environment.
+
+### 8.2 Serial Debug Levels
+
+The compile-time `SERIAL_DEBUG_LEVEL` flag controls all serial output:
+
+| Level | Name | Serial.begin() | What prints to serial |
+|-------|------|----------------|----------------------|
+| 0 | OFF | No | Nothing |
+| 1 | INFO | Yes | MLOG_INFO, MLOG_WARN, MLOG_ERROR |
+| 2 | DEBUG | Yes | Everything — all MLOG_* messages + verbose DEBUG_PRINTF boot/diagnostic output |
+
+This is independent of the runtime MQTT log level (Section 6.3), which controls what goes to the MQTT log queue.
+
+### 8.3 Build Flags
 
 ```ini
 build_flags =
     -DARDUINO_USB_CDC_ON_BOOT=1
     -DARDUINO_USB_MODE=1
+    -DSERIAL_DEBUG_LEVEL=<0|1|2>
     -std=gnu++17
 board_build.usb_cdc = true
 board_build.arduino.memory_type = qio_qspi
@@ -358,7 +377,7 @@ Push-based firmware update via HTTP multipart upload on port 80. Works from Dock
 ```bash
 curl -X POST http://192.168.0.177/ota \
   -H "Authorization: Bearer modbus_ota_2023" \
-  -F "firmware=@.pio/build/esp32-c3-ota/firmware.bin"
+  -F "firmware=@.pio/build/esp32-c3-release/firmware.bin"
 ```
 
 **Response:** `{"status":"ok","message":"Rebooting..."}` on success, device reboots automatically.
@@ -381,7 +400,7 @@ curl -s http://192.168.0.87:8080/api/devices
 # Flash (replace port with actual slot port)
 python3 -m esptool --chip esp32c3 \
   --port "rfc2217://192.168.0.87:4002" --baud 921600 \
-  write-flash -z 0x0 .pio/build/esp32-c3-ota/firmware.bin
+  write-flash -z 0x0 .pio/build/esp32-c3-release/firmware.bin
 ```
 
 ---
@@ -618,7 +637,7 @@ Response:
 ```bash
 curl -X POST http://192.168.0.177/ota \
   -H "Authorization: Bearer modbus_ota_2023" \
-  -F "firmware=@.pio/build/esp32-c3-ota/firmware.bin"
+  -F "firmware=@.pio/build/esp32-c3-release/firmware.bin"
 ```
 
 ### 14.8 Implementation Notes
@@ -714,11 +733,14 @@ Response on `MBUS-PROXY/debug/dump`:
 {"cmd": "reload_config"}
 ```
 
-### 15.5 Serial Debug Mirror
+### 15.5 Serial Debug Output
 
-When USB serial is connected AND debug level is 0:
-- All MQTT debug output is also sent to serial
-- Allows simultaneous local and remote debugging
+Serial output is controlled by the compile-time `SERIAL_DEBUG_LEVEL` (see Section 8.2):
+- **Level 0 (OFF)**: No serial output. Use MQTT log for remote debugging.
+- **Level 1 (INFO)**: Important messages (WiFi, MQTT, NVS, errors) to serial.
+- **Level 2 (DEBUG)**: All messages including verbose MODBUS frames and boot diagnostics.
+
+The MQTT log level (runtime, Section 6.3) and serial debug level (compile-time) are independent. A `release` build (serial level 1) can still send DEBUG-level messages to MQTT when debug mode is enabled.
 
 ---
 
@@ -780,7 +802,7 @@ When USB serial is connected AND debug level is 0:
 - ✅ HTTP OTA firmware update (POST /ota with Bearer auth)
 - ✅ OTA health check (GET /ota/health)
 - ✅ mDNS hostname advertisement (modbus-proxy.local)
-- ✅ Automated unit tests (77 native tests via `pio test -e native`)
+- ✅ Automated unit tests (77 tests via `pio test -e unit-test`)
 - ✅ Automated integration tests (58 tests via `pytest`)
 - ⬜ OTA debug output via MQTT
 - ⬜ Debug dump command via MQTT

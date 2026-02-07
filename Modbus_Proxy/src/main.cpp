@@ -74,7 +74,7 @@ void captivePortalTask(void *pvParameters) {
 }
 
 void setup() {
-#if ENABLE_SERIAL_DEBUG
+#if SERIAL_DEBUG_LEVEL > 0
     Serial.begin(115200);
     // Wait briefly for USB CDC to be ready on ESP32-C3
     delay(100);
@@ -153,7 +153,7 @@ void setup() {
     DEBUG_PRINTF("   Power Correction Threshold: %.0f W\n", CORRECTION_THRESHOLD);
     DEBUG_PRINTF("   Wallbox Data Max Age: %d ms\n", WALLBOX_DATA_MAX_AGE_MS);
     DEBUG_PRINTF("   Watchdog Timeout: %d ms\n", WATCHDOG_TIMEOUT_MS);
-    DEBUG_PRINTF("   Serial Debug: %s\n\n", ENABLE_SERIAL_DEBUG ? "ENABLED" : "DISABLED");
+    DEBUG_PRINTF("   Serial Debug Level: %d (%s)\n\n", SERIAL_DEBUG_LEVEL, SERIAL_DEBUG_LEVEL == 0 ? "OFF" : SERIAL_DEBUG_LEVEL == 1 ? "INFO" : "DEBUG");
     DEBUG_PRINTF("   Debug Mode: %s\n\n", isDebugModeEnabled() ? "ENABLED" : "DISABLED");
 
     // Initialize WiFi manager
