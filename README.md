@@ -118,11 +118,11 @@ cp credentials.h.example credentials.h
 ```bash
 cd Modbus_Proxy
 
-# Serial upload (first time)
+# Serial upload (first time, local USB)
 pio run -e esp32-c3-serial --target upload    # For ESP32-C3
 pio run -e esp32-s3-serial --target upload    # For ESP32-S3
 
-# OTA upload (after initial flash)
+# OTA upload (after initial flash, wireless)
 pio run -e esp32-c3-ota --target upload       # For ESP32-C3
 pio run -e esp32-s3-ota --target upload       # For ESP32-S3
 ```
@@ -131,6 +131,20 @@ pio run -e esp32-s3-ota --target upload       # For ESP32-S3
 ```bash
 pio device monitor    # USB Serial
 telnet <IP_ADDRESS> 23  # Telnet (if enabled)
+```
+
+### Remote Flashing
+
+```bash
+# Network serial (no buttons needed) — see Serial Portal for setup
+python3 -m esptool --chip esp32c3 \
+  --port "rfc2217://192.168.0.87:4002" --baud 921600 \
+  write-flash -z 0x0 .pio/build/esp32-c3-ota/firmware.bin
+
+# HTTP OTA (requires WiFi connection)
+curl -X POST http://192.168.0.177/ota \
+  -H "Authorization: Bearer modbus_ota_2023" \
+  -F "firmware=@.pio/build/esp32-c3-ota/firmware.bin"
 ```
 
 ---
@@ -262,7 +276,9 @@ Default OTA password: `modbus_ota_2023`
 
 ## 📚 Documentation
 
-- **[Modbus-Proxy-FSD.md](Modbus_Proxy/Modbus-Proxy-FSD.md)**: Complete Functional Specification Document (v3.0)
+- **[Modbus-Proxy-FSD.md](docs/Modbus-Proxy-FSD.md)**: Functional Specification Document (v5.3)
+- **[Test Specification](docs/modbus-proxy-test-spec.md)**: Test specification (168 automated + 47 manual tests)
+- **[Serial Portal](https://github.com/SensorsIot/Serial-via-Ethernet)**: RFC2217 Serial Portal for remote flashing
 
 ---
 

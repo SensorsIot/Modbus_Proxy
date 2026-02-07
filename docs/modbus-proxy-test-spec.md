@@ -4,7 +4,7 @@
 
 | Field | Value |
 |-------|-------|
-| Version | 1.1 |
+| Version | 1.5 |
 | Status | Draft |
 | Created | 2026-02-05 |
 | Related | OCPP-Server FSD v1.3 |
@@ -40,6 +40,48 @@ This document specifies test cases for the Modbus_Proxy firmware, which acts as 
 5. **MQTT Logging**: Log events published to MQTT with offline buffering
 6. **NVS Storage**: Persistent configuration across reboots
 7. **Watchdog Protection**: Software + hardware watchdog for crash recovery
+8. **Web UI**: 3-page dashboard (Dashboard/Status/Setup) with REST API
+9. **Captive Portal**: WiFi provisioning via AP mode (3 power cycle trigger)
+10. **mDNS**: Hostname advertisement (modbus-proxy.local)
+
+### 1.3 Test Suite at a Glance
+
+The project has **168 automated tests** (run without human intervention) and **47 manual tests** (require a human or physical hardware). Together they verify that the proxy reads meter data correctly, adjusts it for wallbox charging, survives network failures, and can be configured remotely.
+
+#### Automated Tests — 168 total
+
+Run on every code change to catch regressions immediately.
+
+| Category | Tests | What it proves in plain English |
+|----------|------:|--------------------------------|
+| **Data Accuracy** (float conversion + DTSU parsing) | 38 | The device reads and writes meter values correctly — like checking a calculator always gives the right answer. |
+| **Transmission Integrity** (CRC validation) | 11 | Data isn't corrupted on the wire — the same checksum principle banks use to detect transfer errors. |
+| **Power Correction Math** | 16 | Wallbox charging power is correctly added to meter readings so the inverter sees true household consumption. |
+| **Configuration & Defaults** | 12 | The device starts with sensible settings and stores them reliably across reboots. |
+| **Web API** (REST endpoints) | 22 | The web interface provides correct status data and accepts configuration changes without errors. |
+| **Network Messaging** (MQTT) | 18 | Wallbox power arrives correctly over WiFi, bad messages are rejected, and configuration commands work. |
+| **End-to-End Pipeline** (test injection) | 16 | The complete data flow — meter reading through correction to inverter output — produces the right result, verified without needing physical Modbus hardware. |
+| **OTA Security** | 4 | Firmware updates require the correct password; unauthorized uploads are rejected. |
+| **WiFi Integration** (via WiFi Tester) | 33 | The device connects, reconnects after dropout, handles bad credentials, enters captive portal, and serves all endpoints on an isolated test network. |
+
+**How to run:**
+```
+pio test -e native                    # 77 unit tests (no hardware, seconds)
+pytest test/integration/ -v           # 58 integration tests (needs live device)
+pytest test/wifi/ -v                  # 33 WiFi tests (needs WiFi Tester hardware)
+pytest test/wifi/ -m "not captive_portal"  # WiFi tests without slow portal tests
+```
+
+#### Manual Tests — 47 total
+
+Require a human operator, physical hardware, or long observation periods.
+
+| Category | Tests | What it proves in plain English |
+|----------|------:|--------------------------------|
+| **Startup & Basic Operation** (TC-100 to TC-109) | 10 | The device boots, connects to WiFi and MQTT, and processes wallbox data and configuration commands. |
+| **Resilience & Edge Cases** (EC-100 to EC-116) | 17 | The device recovers gracefully from network outages, corrupted messages, memory pressure, and unexpected conditions — it doesn't just work, it keeps working. |
+| **Web Interface & Captive Portal** (WEB-100 to CP-103) | 14 | The dashboard shows correct live data, settings can be changed through the browser, and a new device can be set up via the WiFi portal without any tools. |
+| **Long-Duration Stability** (LD-001 to LD-006) | 6 | The device runs reliably for days to weeks without memory leaks, crashes, or false alarms. |
 
 ## 2. Test Environment
 
@@ -58,6 +100,10 @@ This document specifies test cases for the Modbus_Proxy firmware, which acts as 
 |------|---------|
 | mosquitto_pub/sub | MQTT message injection and monitoring |
 | PlatformIO | Firmware build and flash |
+| PlatformIO native | Host-side unit test runner (`pio test -e native`) |
+| Unity (C) | Unit test framework for native tests |
+| pytest | Python integration test framework |
+| paho-mqtt | Python MQTT client for integration tests |
 | Serial Monitor | Debug log capture |
 | Python scripts | Automated test sequences |
 
@@ -71,6 +117,63 @@ This document specifies test cases for the Modbus_Proxy firmware, which acts as 
 | `MBUS-PROXY/power` | Publish | Corrected power data |
 | `MBUS-PROXY/health` | Publish | System health status |
 | `MBUS-PROXY/log` | Publish | Log events |
+
+### 2.4 Automated Test Coverage
+
+#### Unit Tests (native, no hardware required)
+
+| Test File | Tests | Source Under Test |
+|-----------|-------|-------------------|
+| `test_float_conversion` | 23 | `dtsu666.cpp` — parseFloat32, encodeFloat32, parseInt16, parseUInt16 |
+| `test_crc_validation` | 11 | `ModbusRTU485.cpp` — crc16, frame validation |
+| `test_power_correction` | 16 | `dtsu666.cpp` — applyPowerCorrection, threshold logic |
+| `test_dtsu_parsing` | 15 | `dtsu666.cpp` — parseDTSU666Data, encodeDTSU666Response, parseDTSU666Response |
+| `test_config_defaults` | 12 | `nvs_config.cpp` — getDefaultConfig, constants |
+
+**Run:** `cd Modbus_Proxy && pio test -e native`
+
+#### Integration Tests (Python, requires live device)
+
+| Test File | Tests | Description |
+|-----------|-------|-------------|
+| `test_rest_api.py` | ~22 | REST API endpoints: status, config, debug, 404 |
+| `test_mqtt.py` | ~18 | MQTT wallbox messages, config commands, edge cases |
+| `test_inject.py` | ~16 | Test injection endpoint: pipeline validation, correction, access control |
+
+**Run:** `pip install -r test/integration/requirements.txt && pytest test/integration/ -v`
+
+### 2.5 Test Injection Endpoint
+
+The firmware includes a debug-only REST endpoint `POST /api/test/inject` that simulates DTSU meter data flowing through the full proxy pipeline without requiring physical Modbus hardware.
+
+**Activation:** Debug mode must be enabled first via `POST /api/debug {"enabled": true}`.
+
+**Request body (all fields optional, defaults shown):**
+```json
+{
+  "power_total": 5000.0,
+  "voltage": 230.0,
+  "frequency": 50.0,
+  "current": 10.0
+}
+```
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "dtsu_power": 5000.0,
+  "wallbox_power": 0.0,
+  "correction_active": false,
+  "sun2000_power": 5000.0
+}
+```
+
+**Pipeline:** The endpoint builds a `DTSU666Data` struct, encodes it to Modbus wire format, parses it back (same as the real proxy), applies power correction if wallbox data is active and above threshold, then updates the shared data that `/api/status` reports.
+
+**Implementation:** `src/test_inject.cpp` / `src/test_inject.h` — encapsulated in a separate file, only the route registration is in `web_server.cpp`.
+
+**Security:** Returns HTTP 403 when debug mode is disabled. Not compiled out — the guard is a runtime check, keeping the binary identical for test and production.
 
 ## 3. Standard Test Cases
 
@@ -411,7 +514,170 @@ This document specifies test cases for the Modbus_Proxy firmware, which acts as 
 
 **Pass Criteria**: Watchdog operates independently of MQTT connectivity.
 
-## 5. Long-Duration Tests
+## 5. Web UI & Captive Portal Tests
+
+### 5.1 WEB-100: Dashboard Page Loads
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Open http://{device-ip}/ in browser | Dashboard page loads |
+| 2 | Verify navigation bar | Dashboard/Status/Setup links present |
+| 3 | Verify status indicators | MQTT, DTSU, SUN2000 dots visible |
+| 4 | Verify wallbox power display | Large centered value shown |
+| 5 | Verify power grid | DTSU, Correction, SUN2000 values displayed |
+| 6 | Wait 4 seconds | Values auto-refresh (2s interval) |
+
+**Pass Criteria**: Page loads, all elements present, auto-refresh working.
+
+### 5.2 WEB-101: Dashboard Power Color Coding
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Set wallbox power to 0W | Wallbox value displays cyan |
+| 2 | Publish wallbox power 500W | Value displays green |
+| 3 | Publish wallbox power 1500W | Value displays amber (correction active) |
+
+**Pass Criteria**: Color changes match thresholds (0=cyan, >0=green, >1000=amber).
+
+### 5.3 WEB-102: Status Page System Info
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Navigate to /status | Status page loads |
+| 2 | Check System section | Uptime, heap, min heap displayed |
+| 3 | Check WiFi section | SSID, IP, RSSI displayed |
+| 4 | Check MQTT section | Connection status, host:port, reconnects |
+| 5 | Check MODBUS section | DTSU/wallbox/proxy update counts |
+| 6 | Wait 10 seconds | Values auto-refresh (5s interval) |
+
+**Pass Criteria**: All sections display correct live data.
+
+### 5.4 WEB-103: Setup Page - Debug Toggle
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Navigate to /setup | Setup page loads |
+| 2 | Toggle debug mode ON | POST /api/debug {"enabled":true} |
+| 3 | Refresh /api/status | debug_mode: true |
+| 4 | Toggle debug mode OFF | POST /api/debug {"enabled":false} |
+| 5 | Restart device | Debug mode persisted in NVS |
+
+**Pass Criteria**: Debug toggle saves to NVS, survives reboot.
+
+### 5.5 WEB-104: Setup Page - MQTT Configuration
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Navigate to /setup | Current MQTT config loaded |
+| 2 | Change MQTT host | Enter new host value |
+| 3 | Click Save | POST /api/config {"type":"mqtt",...} |
+| 4 | Check response | {"status":"ok"} |
+| 5 | MQTT reconnects | New broker connection |
+| 6 | Verify /api/config | Updated host returned |
+
+**Pass Criteria**: MQTT config saved, reconnect triggered.
+
+### 5.6 WEB-105: Setup Page - Wallbox Topic
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Navigate to /setup | Current wallbox topic shown |
+| 2 | Change topic to "evcc/power" | Enter new topic |
+| 3 | Click Save | POST /api/config {"type":"wallbox","topic":"evcc/power"} |
+| 4 | Verify subscription | MQTT re-subscribes to new topic |
+
+**Pass Criteria**: Topic changed, MQTT subscription updated.
+
+### 5.7 WEB-106: Setup Page - Factory Reset
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Change MQTT config to non-default | Custom settings saved |
+| 2 | Navigate to /setup | Setup page |
+| 3 | Click Factory Reset | POST /api/config {"type":"reset"} |
+| 4 | Device restarts | Boot sequence |
+| 5 | Check /api/config | All defaults restored |
+
+**Pass Criteria**: NVS cleared, all settings return to defaults.
+
+### 5.8 WEB-107: REST API /api/status
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | GET /api/status | 200 OK, JSON response |
+| 2 | Verify fields | uptime, free_heap, wifi_*, mqtt_*, dtsu_power, wallbox_power, etc. |
+| 3 | Compare with serial output | Values consistent |
+
+**Pass Criteria**: All documented fields present with correct types.
+
+### 5.9 WEB-108: Restart via Web UI
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | POST /api/restart | {"status":"ok"} |
+| 2 | Device reboots | Normal boot sequence |
+| 3 | Web UI accessible | Dashboard loads at same IP |
+
+**Pass Criteria**: Clean restart, config preserved.
+
+### 5.10 WEB-109: mDNS Hostname
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Device connected to WiFi | mDNS started |
+| 2 | Browse to http://modbus-proxy.local | Dashboard loads |
+| 3 | Verify mDNS service | HTTP service advertised on port 80 |
+
+**Pass Criteria**: Device reachable via hostname (requires mDNS client on network).
+
+### 5.11 CP-100: Captive Portal Activation (3 Power Cycles)
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Power cycle device 3 times rapidly | Boot count increments each time |
+| 2 | On 3rd boot | "CAPTIVE PORTAL MODE TRIGGERED" in serial |
+| 3 | Check WiFi | AP mode: SSID "MODBUS-Proxy-Setup" |
+| 4 | Connect phone/laptop to AP | Auto-redirect to portal page |
+| 5 | Portal page displays | WiFi scan and password entry |
+
+**Pass Criteria**: 3 rapid reboots triggers AP mode with captive portal.
+
+### 5.12 CP-101: Captive Portal WiFi Configuration
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | In portal mode | Connected to "MODBUS-Proxy-Setup" AP |
+| 2 | Scan for networks | GET /api/scan returns nearby networks |
+| 3 | Select network, enter password | Fill form |
+| 4 | Click Save | POST /api/wifi saves credentials |
+| 5 | Device restarts | Connects to configured network |
+| 6 | Boot count resets | Normal operation |
+
+**Pass Criteria**: WiFi credentials saved via portal, device connects on restart.
+
+### 5.13 CP-102: Captive Portal Timeout
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Trigger captive portal mode | AP active |
+| 2 | Do nothing for 5 minutes | Timeout reached |
+| 3 | Device restarts | Attempts normal WiFi connection |
+
+**Pass Criteria**: Portal doesn't run indefinitely; 5-minute timeout triggers restart.
+
+### 5.14 CP-103: Boot Counter Reset on Success
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Power cycle once | Boot count = 1 |
+| 2 | WiFi connects successfully | Boot count reset to 0 |
+| 3 | Power cycle once more | Boot count = 1 (not 2) |
+
+**Pass Criteria**: Successful WiFi connection resets boot counter, preventing accidental portal activation.
+
+---
+
+## 6. Long-Duration Tests
 
 | Test ID | Duration | Description | Pass Criteria |
 |---------|----------|-------------|---------------|
@@ -422,9 +688,9 @@ This document specifies test cases for the Modbus_Proxy firmware, which acts as 
 | LD-005 | 24 hours | Watchdog stability | No false watchdog triggers, heap stable |
 | LD-006 | 48 hours | Repeated WiFi/MQTT disconnects | Watchdog does not trigger during normal reconnects |
 
-## 6. Test Commands Reference
+## 7. Test Commands Reference
 
-### 6.1 MQTT Test Commands
+### 7.1 MQTT Test Commands
 
 ```bash
 # Subscribe to all MBUS-PROXY topics
@@ -452,7 +718,7 @@ mosquitto_pub -h 192.168.0.203 -t "MBUS-PROXY/cmd/config" -m '{"cmd": "set_mqtt"
 mosquitto_pub -h 192.168.0.203 -t "MBUS-PROXY/cmd/config" -m '{"cmd": "factory_reset"}'
 ```
 
-### 6.2 Build and Flash Commands
+### 7.2 Build and Flash Commands
 
 ```bash
 # Build for serial upload
@@ -471,7 +737,7 @@ pio run -e esp32-c3-ota -t upload
 pio device monitor -b 115200
 ```
 
-## 7. Test Report Template
+## 8. Test Report Template
 
 ```
 ═══════════════════════════════════════════════════════════════
@@ -506,6 +772,164 @@ NOTES
 ═══════════════════════════════════════════════════════════════
 ```
 
+## 9. Automated Test Edge Cases
+
+### 9.1 Unit Test Edge Cases
+
+These edge cases are covered by the native unit tests (no hardware required):
+
+#### Float Conversion (`test_float_conversion`)
+- IEEE754 special values: NaN, +infinity, -infinity, subnormal (smallest positive)
+- Round-trip encode→parse for positive, negative, small, and large values
+- Offset parameter correctness (data not at byte 0)
+
+#### CRC Validation (`test_crc_validation`)
+- Empty/zero-length buffer (returns initial CRC 0xFFFF)
+- Single-byte buffer, all-zeros, all-0xFF buffers
+- Corrupted data byte vs corrupted CRC byte detection
+- Null pointer handling, minimum valid frame (4 bytes)
+
+#### Power Correction (`test_power_correction`)
+- Threshold boundary: exactly 1000W does NOT trigger (strict `>` comparison)
+- Negative power above threshold (e.g., -1500W → `fabs()` > 1000)
+- Null buffer, short buffer (<165 bytes) → returns false
+- Phase distribution: correction/3 applied to L1, L2, L3 individually
+- Demand fields corrected identically to power fields
+- Large correction (22kW), negative correction, zero correction
+- Non-power fields (voltage, frequency) preserved unchanged
+- CRC recalculated correctly after modification
+
+#### DTSU Parsing (`test_dtsu_parsing`)
+- Invalid message (valid=false), wrong type (Request vs Reply), null raw pointer
+- Wrong payload size (80 instead of 160 bytes) → returns false
+- Power sign inversion: wire value 3000.0 → parsed as -3000.0 (power_scale=-1)
+- Voltage passthrough: no inversion (volt_scale=1.0)
+- Encode-parse round-trip for all 40 fields (power fields double-negated)
+- All-zero data round-trip
+
+#### Config Defaults (`test_config_defaults`)
+- Each default value matches #define (host, port, user, pass, topic, logLevel)
+- Null termination of char[] fields at last byte position
+- Constants: CORRECTION_THRESHOLD=1000, WALLBOX_DATA_MAX_AGE_MS=30000, WATCHDOG_TIMEOUT_MS=60000, MIN_FREE_HEAP=20000
+
+### 9.2 Integration Test Edge Cases
+
+These edge cases are covered by Python integration tests (requires live device + MQTT broker):
+
+#### REST API (`test_rest_api.py`)
+- Invalid JSON body → 400 response
+- Unknown config type → error status in 200 response
+- Non-existent path → 404
+- Debug toggle ON/OFF verified via /api/status
+- All documented /api/status fields present with correct types
+
+#### Test Injection (`test_inject.py`)
+- Access control: returns 403 when debug mode disabled, 200 when enabled
+- Default values: no parameters → 5000W/230V/50Hz/10A injected
+- Custom power: 0W, negative (-3000W), large (22kW)
+- Status integration: increments `dtsu_updates`, updates `dtsu_power` in `/api/status`
+- Multiple injections: last value reflected in status
+- Correction pipeline: without wallbox → no correction; with wallbox MQTT → correction applied
+- Invalid JSON → 400, GET method → 404/405
+
+#### MQTT (`test_mqtt.py`)
+- Empty wallbox message → ignored, error count incremented
+- Non-numeric wallbox message ("not_a_number") → error count incremented
+- Oversized message (300 bytes, >256 limit) → handled gracefully, device alive
+- Malformed JSON config command → device continues operating
+- Missing "cmd" field in config JSON → error response
+- Rapid burst: 10 messages in 1 second → last value applied, no crash
+- Special characters in payload (`<>&"'`) → no crash
+- Negative wallbox power values → correctly stored and reported
+
+---
+
+## 10. WiFi Integration Tests (Automated via WiFi Tester)
+
+These tests use the [WiFi Tester](https://github.com/SensorsIot/Wifi-Tester) — a serial-controlled ESP32-C3 that acts as a programmable WiFi access point. All DUT HTTP communication goes through the WiFi Tester's serial relay. No manual intervention required.
+
+**Hardware required:** WiFi Tester (ESP32-C3 SuperMini) connected via USB serial.
+
+**Run:**
+```bash
+pip install -r test/wifi/requirements.txt
+pip install -e <path-to-Wifi-Tester>/pytest  # WiFi Tester driver
+
+# All WiFi tests
+WIFI_TESTER_PORT=/dev/ttyACM0 DUT_IP=192.168.0.177 pytest test/wifi/ -v
+
+# Skip slow captive portal tests
+pytest test/wifi/ -v -m "not captive_portal"
+
+# Only captive portal tests
+pytest test/wifi/ -v -m captive_portal
+```
+
+### 10.1 WiFi Connection Tests (WIFI-1xx)
+
+| ID | Test | What it proves |
+|----|------|---------------|
+| WIFI-100 | Connect to test AP | DUT connects and reports correct SSID |
+| WIFI-101 | DHCP address assigned | DUT gets IP in 192.168.4.x range |
+| WIFI-102 | mDNS resolves on test network | modbus-proxy.local works on isolated network |
+| WIFI-103 | Web dashboard accessible | HTML page loads via relay |
+| WIFI-104 | REST API accessible | /api/status returns valid JSON |
+| WIFI-105 | Connect with WPA2 | DUT handles WPA2 authentication |
+| WIFI-106 | Connect to open network | DUT connects without password |
+| WIFI-107 | Boot counter resets on success | Single reboot doesn't trigger captive portal |
+
+### 10.2 AP Dropout and Reconnection (WIFI-2xx)
+
+| ID | Test | What it proves |
+|----|------|---------------|
+| WIFI-200 | Reconnect after 5s AP dropout | DUT auto-reconnects after AP returns |
+| WIFI-201 | Brief 2s dropout, no reboot | DUT reconnects without rebooting (uptime continues) |
+| WIFI-202 | Extended 90s dropout | DUT recovers even after long outage |
+| WIFI-203 | AP SSID changes | DUT cannot connect to wrong SSID |
+| WIFI-204 | AP password changes | DUT cannot connect with old password |
+| WIFI-205 | 5 dropout cycles, heap stable | No memory leak across repeated reconnections |
+
+### 10.3 Invalid Credentials (WIFI-3xx)
+
+| ID | Test | What it proves |
+|----|------|---------------|
+| WIFI-300 | Wrong password | DUT fails gracefully, doesn't crash |
+| WIFI-301 | Wrong SSID | DUT fails and falls back to credentials.h |
+| WIFI-302 | Empty password for WPA2 AP | Auth failure handled |
+| WIFI-303 | Correct creds after bad | DUT recovers after credential correction |
+
+### 10.4 Captive Portal (WIFI-4xx)
+
+| ID | Test | What it proves |
+|----|------|---------------|
+| WIFI-400 | Portal activates after 3 failed boots | Boot counter triggers AP mode correctly |
+| WIFI-401 | Portal page accessible | Portal HTML served on 192.168.4.1 |
+| WIFI-402 | WiFi scan endpoint in portal | /api/scan returns network list |
+| WIFI-403 | Full provisioning flow | Portal → submit creds → DUT connects to new AP |
+| WIFI-404 | Portal DNS redirect | Captive portal detection URLs redirect |
+| WIFI-405 | Portal timeout (5 min) | Portal auto-restarts after timeout |
+| WIFI-406 | Normal boot no portal | Single reboot doesn't trigger portal |
+
+### 10.5 Credential Management (WIFI-5xx)
+
+| ID | Test | What it proves |
+|----|------|---------------|
+| WIFI-500 | NVS credentials persist | DUT reconnects to same AP after reboot |
+| WIFI-501 | NVS priority over fallback | NVS creds used before credentials.h |
+| WIFI-502 | POST /api/wifi saves and reboots | Credential save endpoint works |
+| WIFI-503 | Factory reset clears WiFi | Reset removes NVS creds, falls back |
+| WIFI-504 | Long SSID (32 chars) | Max SSID length works |
+| WIFI-505 | Special characters in password | Handles !@#$% in credentials |
+
+### 10.6 Network Services on Test AP (WIFI-6xx)
+
+| ID | Test | What it proves |
+|----|------|---------------|
+| WIFI-600 | Full REST API via relay | All key endpoints work through serial proxy |
+| WIFI-601 | OTA health check | /ota/health responds via relay |
+| WIFI-602 | RSSI reported correctly | RSSI is plausible negative value |
+| WIFI-603 | wifi_ssid matches test AP | Reported SSID matches configured AP |
+
 ---
 
 ## Revision History
@@ -514,3 +938,8 @@ NOTES
 |---------|------|---------|
 | 1.0 | 2026-02-05 | Initial specification |
 | 1.1 | 2026-02-05 | Added watchdog test cases (EC-113 to EC-116, LD-005, LD-006) |
+| 1.2 | 2026-02-06 | Added Web UI test cases (WEB-100 to WEB-109), captive portal tests (CP-100 to CP-103), mDNS |
+| 1.3 | 2026-02-06 | Added automated test coverage (Section 2.4), edge cases chapter (Section 9), PlatformIO native + pytest tools |
+| 1.5 | 2026-02-06 | Added test suite overview (Section 1.3) with classification and layman summaries |
+| 1.4 | 2026-02-06 | Added test injection endpoint (Section 2.5), `test_inject.py` integration tests, removed manual test cross-references |
+| 1.6 | 2026-02-06 | Added WiFi integration tests (Section 10, WIFI-1xx to WIFI-6xx) using WiFi Tester instrument |

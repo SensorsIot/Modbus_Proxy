@@ -1,0 +1,5 @@
+requests>=2.28.0
+pyserial>=3.5
+pytest>=7.0.0
+pytest-timeout>=2.1.0
+# WiFi Tester driver: pip install -e <path-to-Wifi-Tester>/pytest

@@ -174,3 +174,116 @@ bool resetToDefaults() {
 
   return success;
 }
+
+// Boot count functions
+uint8_t getBootCount() {
+  if (!preferences.begin(NVS_NAMESPACE, true)) {
+    return 0;
+  }
+  uint8_t count = preferences.getUChar(NVS_KEY_BOOT_COUNT, 0);
+  preferences.end();
+  return count;
+}
+
+void incrementBootCount() {
+  if (!preferences.begin(NVS_NAMESPACE, false)) {
+    Serial.println("Failed to open NVS for boot count increment");
+    return;
+  }
+  uint8_t count = preferences.getUChar(NVS_KEY_BOOT_COUNT, 0);
+  count++;
+  preferences.putUChar(NVS_KEY_BOOT_COUNT, count);
+  preferences.end();
+  Serial.printf("Boot count incremented to: %d\n", count);
+}
+
+void resetBootCount() {
+  if (!preferences.begin(NVS_NAMESPACE, false)) {
+    Serial.println("Failed to open NVS for boot count reset");
+    return;
+  }
+  preferences.putUChar(NVS_KEY_BOOT_COUNT, 0);
+  preferences.end();
+  Serial.println("Boot count reset to 0");
+}
+
+// WiFi credentials functions
+bool saveWiFiCredentials(const char* ssid, const char* pass) {
+  if (!ssid || strlen(ssid) == 0) {
+    return false;
+  }
+
+  if (!preferences.begin(NVS_NAMESPACE, false)) {
+    Serial.println("Failed to open NVS for writing WiFi credentials");
+    return false;
+  }
+
+  bool success = true;
+  success &= preferences.putString(NVS_KEY_WIFI_SSID, ssid);
+  if (pass) {
+    success &= preferences.putString(NVS_KEY_WIFI_PASS, pass);
+  } else {
+    success &= preferences.putString(NVS_KEY_WIFI_PASS, "");
+  }
+
+  preferences.end();
+
+  if (success) {
+    Serial.printf("WiFi credentials saved: SSID=%s\n", ssid);
+  }
+
+  return success;
+}
+
+bool loadWiFiCredentials(char* ssid, size_t ssidLen, char* pass, size_t passLen) {
+  if (!preferences.begin(NVS_NAMESPACE, true)) {
+    return false;
+  }
+
+  String storedSSID = preferences.getString(NVS_KEY_WIFI_SSID, "");
+  String storedPass = preferences.getString(NVS_KEY_WIFI_PASS, "");
+  preferences.end();
+
+  if (storedSSID.length() == 0) {
+    return false;
+  }
+
+  strncpy(ssid, storedSSID.c_str(), ssidLen - 1);
+  ssid[ssidLen - 1] = '\0';
+  strncpy(pass, storedPass.c_str(), passLen - 1);
+  pass[passLen - 1] = '\0';
+
+  Serial.printf("WiFi credentials loaded: SSID=%s\n", ssid);
+  return true;
+}
+
+bool hasStoredWiFiCredentials() {
+  if (!preferences.begin(NVS_NAMESPACE, true)) {
+    return false;
+  }
+
+  String storedSSID = preferences.getString(NVS_KEY_WIFI_SSID, "");
+  preferences.end();
+
+  return storedSSID.length() > 0;
+}
+
+// Debug mode functions
+bool isDebugModeEnabled() {
+  if (!preferences.begin(NVS_NAMESPACE, true)) {
+    return false;
+  }
+  bool enabled = preferences.getBool(NVS_KEY_DEBUG_MODE, false);
+  preferences.end();
+  return enabled;
+}
+
+void setDebugMode(bool enabled) {
+  if (!preferences.begin(NVS_NAMESPACE, false)) {
+    Serial.println("Failed to open NVS for debug mode");
+    return;
+  }
+  preferences.putBool(NVS_KEY_DEBUG_MODE, enabled);
+  preferences.end();
+  Serial.printf("Debug mode %s\n", enabled ? "enabled" : "disabled");
+}

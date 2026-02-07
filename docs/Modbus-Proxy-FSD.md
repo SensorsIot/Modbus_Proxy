@@ -1,6 +1,6 @@
 # ESP32 MODBUS RTU Intelligent Proxy - Functional Specification Document
 
-**Version:** 5.0
+**Version:** 5.3
 **Date:** February 2026
 **Platform:** ESP32-C3 (single-core RISC-V)
 **Author:** Andreas Spiess / Claude Code
@@ -74,10 +74,20 @@ Single Core:
 │   ├── Config command handling
 │   ├── Power data publishing
 │   └── Log queue processing
-└── Watchdog Task (Priority 3)
-    ├── Health monitoring (5s)
-    ├── Hardware WDT feed (90s timeout)
-    └── Auto-restart triggers
+├── Watchdog Task (Priority 3)
+│   ├── Health monitoring (5s)
+│   ├── Hardware WDT feed (90s timeout)
+│   └── Auto-restart triggers
+├── Web Server (async, runs in main loop context)
+│   ├── Dashboard / Status / Setup pages
+│   ├── REST API endpoints
+│   └── Captive portal mode (AP only)
+├── WiFi Manager
+│   ├── STA connection with NVS/fallback credentials
+│   ├── AP mode for captive portal
+│   └── DNS redirect for portal detection
+└── Loop Task
+    └── ArduinoOTA handler (legacy)
 ```
 
 ---
@@ -278,9 +288,10 @@ board_build.arduino.memory_type = qio_qspi
 - ArduinoJson @ ^6.19.4
 - PubSubClient @ ^2.8
 - ArduinoOTA
-- Preferences (NVS)
-- ESPAsyncWebServer (for Web UI)
-- AsyncTCP (ESP32 async TCP library)
+- Preferences (NVS, built-in)
+- mathieucarbou/ESP Async WebServer @ ^3.0.6
+- mathieucarbou/AsyncTCP @ ^3.3.2
+- ESPmDNS (built-in)
 
 ---
 
@@ -293,6 +304,7 @@ board_build.arduino.memory_type = qio_qspi
 | Proxy | 4KB |
 | MQTT | 8KB |
 | Watchdog | 2KB |
+| Captive Portal | 4KB (only in AP mode) |
 
 ### 9.2 Heap Requirements
 
@@ -332,18 +344,45 @@ board_build.arduino.memory_type = qio_qspi
 
 ## 11. OTA Updates
 
-### 11.1 Configuration
+### 11.1 HTTP OTA (Preferred)
+
+Push-based firmware update via HTTP multipart upload on port 80. Works from Docker containers and through NAT.
+
+- **Endpoint**: `POST /ota`
+- **Auth**: `Authorization: Bearer modbus_ota_2023`
+- **Health check**: `GET /ota/health` (no auth required)
+- **Upload format**: Multipart form (`-F`), NOT `--data-binary`
+- **Implementation**: `src/http_ota.cpp` / `src/http_ota.h`
+
+**Update command:**
+```bash
+curl -X POST http://192.168.0.177/ota \
+  -H "Authorization: Bearer modbus_ota_2023" \
+  -F "firmware=@.pio/build/esp32-c3-ota/firmware.bin"
+```
+
+**Response:** `{"status":"ok","message":"Rebooting..."}` on success, device reboots automatically.
+
+### 11.2 ArduinoOTA (Legacy)
 
 - **Port**: 3232
 - **Password**: modbus_ota_2023
 - **Hostname**: MODBUS-Proxy
+- **Limitation**: Does not work from Docker containers (NAT blocks callback)
 
-### 11.2 Update Process
+### 11.3 RFC2217 Serial (Network Flash)
 
-1. Device advertises on network
-2. PlatformIO connects via espota
-3. Firmware uploaded with progress reporting
-4. Automatic restart after successful upload
+Remote serial flashing via the [Serial Portal](https://github.com/SensorsIot/Serial-via-Ethernet). No buttons required.
+
+```bash
+# Check which port the C3 is on
+curl -s http://192.168.0.87:8080/api/devices
+
+# Flash (replace port with actual slot port)
+python3 -m esptool --chip esp32c3 \
+  --port "rfc2217://192.168.0.87:4002" --baud 921600 \
+  write-flash -z 0x0 .pio/build/esp32-c3-ota/firmware.bin
+```
 
 ---
 
@@ -358,10 +397,12 @@ board_build.arduino.memory_type = qio_qspi
 
 ### 12.2 Services
 
-- **mDNS**: Enabled (MODBUS-Proxy.local)
-- **OTA**: Port 3232
+- **mDNS**: Enabled (modbus-proxy.local), advertises HTTP service
+- **Web UI**: Port 80 (STA mode - Dashboard/Status/Setup pages)
+- **HTTP OTA**: Port 80, `POST /ota` (Bearer auth)
+- **ArduinoOTA**: Port 3232 (legacy, doesn't work from Docker)
 - **MQTT**: Port 1883 (configurable)
-- **Captive Portal**: Port 80 (AP mode only)
+- **Captive Portal**: Port 80 (AP mode - WiFi provisioning page)
 
 ---
 
@@ -429,77 +470,97 @@ The captive portal configures **WiFi credentials only**:
 
 ### 14.1 Purpose
 
-A lightweight web interface accessible when device is connected to WiFi (STA mode). Provides status monitoring and MQTT broker configuration without requiring MQTT connectivity.
+A lightweight 3-page web interface accessible when device is connected to WiFi (STA mode). Provides real-time power monitoring, system status, and MQTT broker configuration without requiring MQTT connectivity.
 
 ### 14.2 Access
 
-- **URL**: http://MODBUS-Proxy.local or http://{device-ip}
+- **URL**: http://modbus-proxy.local or http://{device-ip} (e.g. http://192.168.0.177)
 - **Port**: 80
 - **Authentication**: None (local network only)
+- **mDNS**: Hostname `modbus-proxy` advertised via ESPmDNS
 
-### 14.3 Status Page (/)
+### 14.3 Navigation
 
-**Real-time Status Display**:
-```
-┌─────────────────────────────────────────────┐
-│  MODBUS Proxy Status                        │
-├─────────────────────────────────────────────┤
-│  WiFi:     Connected (RSSI: -65 dBm)        │
-│  MQTT:     Connected to 192.168.0.203       │
-│  Uptime:   2d 14h 32m                       │
-│  Heap:     184 KB free                      │
-├─────────────────────────────────────────────┤
-│  Power Readings                             │
-│  ├─ DTSU-666:    -18.5 W                    │
-│  ├─ Wallbox:       0.0 W                    │
-│  ├─ SUN2000:     -18.5 W                    │
-│  └─ Correction:  Inactive                   │
-├─────────────────────────────────────────────┤
-│  MODBUS Traffic                             │
-│  ├─ Last RX:     2 seconds ago              │
-│  ├─ Transactions: 12,345                    │
-│  └─ Errors:      0                          │
-├─────────────────────────────────────────────┤
-│  Debug Mode:   [OFF]                        │
-├─────────────────────────────────────────────┤
-│  [Configure]  [Restart]                     │
-└─────────────────────────────────────────────┘
-```
+All three pages share a consistent dark-themed layout with a top navigation bar and status indicator dots (MQTT, DTSU, SUN2000) showing green/amber/red connection health.
 
-**Auto-refresh**: Every 5 seconds via JavaScript
+### 14.4 Dashboard Page (/)
 
-### 14.4 Configuration Page (/config)
+The primary operational view focused on wallbox power and power correction status.
 
-**MQTT Settings**:
-- Broker Host (text input)
-- Broker Port (number input, default 1883)
+**Layout**:
+- **Status indicators**: MQTT, DTSU, SUN2000 dots (green=ok, amber=warn, red=error)
+- **Wallbox Power**: Large center display (3.5em monospace), color-coded:
+  - Cyan: 0 W (idle)
+  - Green: > 0 W (charging)
+  - Amber: > 1000 W (correction active)
+- **Power Grid**: 3-column display showing DTSU Meter, Correction, SUN2000 values
+- **Auto-refresh**: Every 2 seconds via JavaScript `fetch('/api/status')`
+
+### 14.5 Status Page (/status)
+
+Detailed system information for diagnostics.
+
+**Sections**:
+- **System**: Uptime (formatted d/h/m/s), free heap, minimum heap
+- **WiFi**: SSID, IP address, RSSI signal strength
+- **MQTT**: Connection status, broker host:port, reconnect count
+- **MODBUS**: DTSU updates, wallbox updates, wallbox errors, proxy errors
+- **Restart Device** button
+
+**Auto-refresh**: Every 5 seconds
+
+### 14.6 Setup Page (/setup)
+
+Configuration interface for runtime settings.
+
+**Debug Mode**:
+- Toggle switch (ON/OFF) for verbose MQTT logging
+- Persisted in NVS via `POST /api/debug`
+
+**MQTT Broker**:
+- Host (text input)
+- Port (number input, default 1883)
 - Username (text input)
 - Password (password input)
-- Wallbox Topic (text input)
-- Test Connection button
+- Save button (saves to NVS, triggers MQTT reconnect)
+
+**Wallbox Topic**:
+- Topic path (text input)
 - Save button
 
-**Debug Settings**:
-- Debug Mode (toggle: ON/OFF)
-  - When ON: Verbose logging enabled via MQTT topic `MBUS-PROXY/debug`
-  - When OFF: Normal operation (WARN level only)
+**Log Level**:
+- Dropdown: DEBUG (0), INFO (1), WARN (2), ERROR (3)
+- Save button
 
-**Actions**:
-- Save Configuration (saves to NVS, reconnects MQTT)
-- Factory Reset (clears all NVS, restarts)
-- Restart Device
+**Factory Reset**:
+- Reset button (clears NVS, restarts device)
 
-### 14.5 REST API Endpoints
+### 14.7 REST API Endpoints
 
-**GET /api/status** - JSON status:
+**GET /api/status** - Full system status:
 ```json
 {
-  "wifi": {"connected": true, "rssi": -65, "ssid": "private-2G"},
-  "mqtt": {"connected": true, "broker": "192.168.0.203:1883"},
+  "fw_version": "1.1.0",
   "uptime": 123456,
-  "heap": {"free": 184000, "min": 178000},
-  "power": {"dtsu": -18.5, "wallbox": 0.0, "sun2000": -18.5, "active": false},
-  "modbus": {"last_rx": 2, "transactions": 12345, "errors": 0}
+  "free_heap": 184000,
+  "min_free_heap": 178000,
+  "wifi_connected": true,
+  "wifi_ssid": "private-2G",
+  "wifi_ip": "192.168.0.177",
+  "wifi_rssi": -60,
+  "mqtt_connected": true,
+  "mqtt_host": "192.168.0.203",
+  "mqtt_port": 1883,
+  "mqtt_reconnects": 0,
+  "dtsu_power": -18.5,
+  "wallbox_power": 0.0,
+  "sun2000_power": -18.5,
+  "correction_active": false,
+  "dtsu_updates": 1234,
+  "wallbox_updates": 123,
+  "wallbox_errors": 0,
+  "proxy_errors": 0,
+  "debug_mode": false
 }
 ```
 
@@ -514,33 +575,61 @@ A lightweight web interface accessible when device is connected to WiFi (STA mod
 }
 ```
 
-**POST /api/config** - Update configuration:
+**POST /api/config** - Update configuration (type-based dispatch):
 ```json
-{
-  "mqtt_host": "192.168.0.100",
-  "mqtt_port": 1883,
-  "mqtt_user": "newuser",
-  "mqtt_pass": "newpass",
-  "wallbox_topic": "evcc/loadpoints/0/chargePower",
-  "log_level": 1
-}
+{"type": "mqtt", "host": "192.168.0.100", "port": 1883, "user": "admin", "pass": "secret"}
+{"type": "wallbox", "topic": "evcc/loadpoints/0/chargePower"}
+{"type": "loglevel", "level": 1}
+{"type": "reset"}
 ```
 
 **POST /api/restart** - Restart device
-
-**POST /api/factory-reset** - Factory reset
 
 **POST /api/debug** - Toggle debug mode:
 ```json
 {"enabled": true}
 ```
 
-### 14.6 Implementation Notes
+**GET /api/scan** - WiFi network scan (portal mode only):
+```json
+{"networks": [{"ssid": "MyNetwork", "rssi": -55, "encrypted": true}]}
+```
 
-- Uses ESPAsyncWebServer for non-blocking operation
-- Static HTML/CSS/JS stored in PROGMEM (flash)
-- Minimal footprint (~15KB flash for web assets)
-- Status page auto-refreshes via JavaScript fetch
+**POST /api/wifi** - Save WiFi credentials (portal mode only):
+```json
+{"ssid": "MyNetwork", "password": "secret"}
+```
+
+**POST /api/test/inject** - Inject test DTSU data (debug mode only, returns 403 if debug disabled):
+```json
+{"power_total": 5000.0, "voltage": 230.0, "frequency": 50.0, "current": 10.0}
+```
+Response:
+```json
+{"status": "ok", "dtsu_power": -5000.0, "wallbox_power": 0.0, "correction_active": false, "sun2000_power": -5000.0}
+```
+
+**GET /ota/health** - OTA health check (no auth required):
+```json
+{"status": "ok"}
+```
+
+**POST /ota** - HTTP OTA firmware upload (multipart form, Bearer auth required):
+```bash
+curl -X POST http://192.168.0.177/ota \
+  -H "Authorization: Bearer modbus_ota_2023" \
+  -F "firmware=@.pio/build/esp32-c3-ota/firmware.bin"
+```
+
+### 14.8 Implementation Notes
+
+- Uses ESPAsyncWebServer (mathieucarbou fork v3.0.6) for non-blocking operation
+- AsyncTCP (mathieucarbou fork v3.3.2) as transport layer
+- Static HTML/CSS/JS stored in PROGMEM (flash) via `web_assets.h`
+- Dark theme (background #1a1a2e) with cyan (#0ff) accent colors
+- Responsive design via CSS grid and flexbox
+- Each page is a self-contained HTML document with inline CSS/JS
+- Portal page served only in AP captive portal mode (separate HTML)
 
 ---
 
@@ -670,15 +759,29 @@ When USB serial is connected AND debug level is 0:
 - ✅ MQTT broker reconnection
 - ✅ Wallbox data timeout handling
 
-### 17.3 New Feature Tests
+### 17.3 Web UI & Provisioning Tests
 
 - ⬜ Captive portal activation (3 power cycles)
-- ⬜ Captive portal WiFi configuration
-- ⬜ Boot counter reset on successful WiFi
-- ⬜ Web UI status page display
-- ⬜ Web UI MQTT broker configuration
-- ⬜ Web UI debug mode toggle
-- ⬜ REST API endpoints
+- ⬜ Captive portal WiFi configuration and restart
+- ⬜ Boot counter reset on successful WiFi connection
+- ✅ Web UI Dashboard - wallbox power display with color coding
+- ✅ Web UI Dashboard - status indicators (MQTT/DTSU/SUN2000)
+- ✅ Web UI Dashboard - power grid (DTSU/Correction/SUN2000)
+- ✅ Web UI Status page - system info, WiFi, MQTT, MODBUS stats
+- ✅ Web UI Setup page - debug mode toggle
+- ✅ Web UI Setup page - MQTT broker configuration
+- ✅ Web UI Setup page - wallbox topic configuration
+- ✅ Web UI Setup page - log level selection
+- ✅ REST API /api/status endpoint
+- ✅ REST API /api/config GET/POST endpoints
+- ✅ REST API /api/debug endpoint
+- ✅ REST API /api/restart endpoint
+- ✅ REST API /api/test/inject endpoint (debug mode only)
+- ✅ HTTP OTA firmware update (POST /ota with Bearer auth)
+- ✅ OTA health check (GET /ota/health)
+- ✅ mDNS hostname advertisement (modbus-proxy.local)
+- ✅ Automated unit tests (77 native tests via `pio test -e native`)
+- ✅ Automated integration tests (58 tests via `pytest`)
 - ⬜ OTA debug output via MQTT
 - ⬜ Debug dump command via MQTT
 
@@ -729,6 +832,9 @@ See DTSU-666 datasheet for complete register definitions (2102-2181)
 ---
 
 **Document Version History**:
+- v5.3 (February 2026): RFC2217 serial flashing without buttons (plain RFC2217 server for C3 native USB), Serial Portal integration
+- v5.2 (February 2026): HTTP OTA with Bearer auth (replaces ArduinoOTA as primary), test injection endpoint, fw_version in /api/status, automated test coverage (77 unit + 58 integration)
+- v5.1 (February 2026): Updated Web UI section to match implemented 3-page layout (Dashboard/Status/Setup), documented REST API responses, added mDNS and library versions
 - v5.0 (February 2026): Captive portal (3 power cycles), Web UI for status/config, OTA debugging
 - v4.0 (February 2025): MQTT-based wallbox power, NVS config, OTA commands
 - v3.0 (January 2025): Dual-platform support (ESP32-S3/C3), telnet debugging

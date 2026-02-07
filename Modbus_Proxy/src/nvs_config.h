@@ -31,7 +31,7 @@ struct MQTTConfig {
 // NVS Namespace
 #define NVS_NAMESPACE "mbus_config"
 
-// NVS Keys
+// NVS Keys - MQTT
 #define NVS_KEY_MQTT_HOST "mqtt_host"
 #define NVS_KEY_MQTT_PORT "mqtt_port"
 #define NVS_KEY_MQTT_USER "mqtt_user"
@@ -39,7 +39,16 @@ struct MQTTConfig {
 #define NVS_KEY_WB_TOPIC "wb_topic"
 #define NVS_KEY_LOG_LEVEL "log_level"
 
-// Function declarations
+// NVS Keys - Boot and WiFi
+#define NVS_KEY_BOOT_COUNT  "boot_count"
+#define NVS_KEY_WIFI_SSID   "wifi_ssid"
+#define NVS_KEY_WIFI_PASS   "wifi_pass"
+#define NVS_KEY_DEBUG_MODE  "debug_mode"
+
+// Boot count threshold for captive portal
+#define BOOT_COUNT_PORTAL_THRESHOLD 3
+
+// Function declarations - MQTT config
 bool initNVSConfig();
 bool loadConfig(MQTTConfig& config);
 bool saveMQTTCredentials(const char* host, uint16_t port, const char* user, const char* pass);
@@ -47,6 +56,20 @@ bool saveWallboxTopic(const char* topic);
 bool saveLogLevel(uint8_t level);
 bool resetToDefaults();
 void getDefaultConfig(MQTTConfig& config);
+
+// Function declarations - Boot count
+uint8_t getBootCount();
+void incrementBootCount();
+void resetBootCount();
+
+// Function declarations - WiFi credentials
+bool saveWiFiCredentials(const char* ssid, const char* pass);
+bool loadWiFiCredentials(char* ssid, size_t ssidLen, char* pass, size_t passLen);
+bool hasStoredWiFiCredentials();
+
+// Function declarations - Debug mode
+bool isDebugModeEnabled();
+void setDebugMode(bool enabled);
 
 // Global config instance
 extern MQTTConfig mqttConfig;

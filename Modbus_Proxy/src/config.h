@@ -1,7 +1,12 @@
 #pragma once
 
+// Firmware version
+#define FW_VERSION "1.1.0"
+
 // Debug settings
+#ifndef ENABLE_SERIAL_DEBUG
 #define ENABLE_SERIAL_DEBUG true
+#endif
 
 // ESP32-C3 Pin definitions - safe GPIOs for UART
 #define RS485_SUN2000_RX_PIN 7
@@ -103,3 +108,12 @@ const uint32_t MIN_FREE_HEAP = 20000;
 #define MQTT_TOPIC_LOG MQTT_TOPIC_ROOT "/log"
 #define MQTT_TOPIC_CMD_CONFIG MQTT_TOPIC_ROOT "/cmd/config"
 #define MQTT_TOPIC_CMD_RESPONSE MQTT_TOPIC_ROOT "/cmd/config/response"
+
+// Web server settings
+#define WEB_SERVER_PORT 80
+#define CAPTIVE_PORTAL_SSID "MODBUS-Proxy-Setup"
+#define CAPTIVE_PORTAL_IP IPAddress(192, 168, 4, 1)
+#define CAPTIVE_PORTAL_GATEWAY IPAddress(192, 168, 4, 1)
+#define CAPTIVE_PORTAL_SUBNET IPAddress(255, 255, 255, 0)
+#define CAPTIVE_PORTAL_TIMEOUT_MS 300000  // 5 minutes
+#define WIFI_CONNECT_TIMEOUT_MS 30000     // 30 seconds

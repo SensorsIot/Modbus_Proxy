@@ -39,8 +39,15 @@ void logMessage(uint8_t level, const char* subsystem, const char* format, ...) {
   // Serial output with timestamp and level
   Serial.printf("[%lu][%s][%s] %s\n", millis(), LOG_LEVEL_NAMES[level], subsystem, buffer);
 
-  // Check if we should queue for MQTT based on configured log level
-  if (level < mqttConfig.logLevel) {
+  // Check debug mode - if enabled, always queue DEBUG level messages
+  bool debugModeEnabled = isDebugModeEnabled();
+
+  // Determine minimum level for MQTT queueing
+  // If debug mode is enabled, queue all messages (including DEBUG)
+  // Otherwise, use configured log level
+  uint8_t minLevel = debugModeEnabled ? LOG_LEVEL_DEBUG : mqttConfig.logLevel;
+
+  if (level < minLevel) {
     return;
   }
 
