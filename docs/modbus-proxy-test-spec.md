@@ -4,7 +4,7 @@
 
 | Field | Value |
 |-------|-------|
-| Version | 2.1 |
+| Version | 2.3 |
 | Status | Draft |
 | Created | 2026-02-05 |
 | Related | Modbus-Proxy FSD v5.5 |
@@ -41,7 +41,7 @@ This document specifies test cases for the Modbus_Proxy firmware, which acts as 
 6. **NVS Storage**: Persistent configuration across reboots
 7. **Watchdog Protection**: Software + hardware watchdog for crash recovery
 8. **Web UI**: 3-page dashboard (Dashboard/Status/Setup) with REST API
-9. **Captive Portal**: WiFi provisioning via AP mode (GPIO 2 button trigger)
+9. **Captive Portal**: WiFi provisioning via AP mode (GPIO trigger via Serial Portal)
 10. **mDNS**: Hostname advertisement (modbus-proxy.local)
 
 ### 1.3 Test Suite at a Glance
@@ -81,7 +81,7 @@ These tests verify the running device via external interfaces. **43 can be fully
 | **Standard Tests** (TC-100 to TC-110) | 11 | 11 | 0 | pytest, paho-mqtt, requests |
 | **Edge Cases** (EC-100 to EC-116) | 17 | 14 | 3 | pytest, paho-mqtt, requests, pyserial (RFC2217), WiFi Tester, SSH |
 | **Web UI** (WEB-100 to WEB-109) | 10 | 8 | 2 | pytest, requests |
-| **Captive Portal** (CP-101 to CP-102) | 2 | 2 | 0 | pytest, pyserial (RFC2217), WiFi Tester |
+| **Captive Portal** (CP-101 to CP-102) | 2 | 2 | 0 | pytest, WiFi Tester (GPIO + serial reset) |
 | **Long Duration** (LD-001 to LD-006) | 6 | 6 | 0 | pytest, paho-mqtt, requests |
 
 **Manual-only tests:** EC-113 / EC-114 / EC-115 (require test firmware with deliberate hang/allocation), WEB-101 (CSS color needs browser), WEB-109 (mDNS is OS-dependent).
@@ -93,8 +93,9 @@ These tests verify the running device via external interfaces. **43 can be fully
 | Component | Description |
 |-----------|-------------|
 | ESP32-C3 DevKit | Device Under Test (DUT) |
-| Serial Portal Pi | RFC2217 serial server at 192.168.0.87 ([Serial Portal](https://github.com/SensorsIot/Serial-via-Ethernet)) |
-| WiFi Tester | Pi Zero W with hostapd/dnsmasq, HTTP-controlled AP at 192.168.0.87:8080 |
+| Serial Portal Pi | RFC2217 serial server + GPIO control at 192.168.0.87 ([Serial Portal](https://github.com/SensorsIot/Serial-via-Ethernet)) |
+| WiFi Tester | Pi wlan0 with hostapd/dnsmasq, HTTP-controlled AP at 192.168.0.87:8080 |
+| GPIO wiring | Pi GPIO 17 → DUT GPIO 2 (portal button, active LOW with INPUT_PULLUP) |
 | MQTT Broker | Mosquitto on 192.168.0.203:1883 |
 | WiFi Network | 2.4GHz network with internet |
 
@@ -156,7 +157,7 @@ python3 esptool.py --port "rfc2217://192.168.0.87:4001" --chip esp32c3 \
 | paho-mqtt | Python MQTT client for integration tests |
 | requests | Python HTTP client for REST API and OTA tests |
 | pyserial (RFC2217) | Remote serial control via `rfc2217://192.168.0.87:4003` for device reset/power cycle |
-| WiFi Tester driver | HTTP-controlled AP: start/stop AP, scan, HTTP relay, station events |
+| WiFi Tester driver | HTTP-controlled AP: start/stop AP, scan, HTTP relay, station events, GPIO control |
 | SSH (subprocess) | Remote broker restart (`systemctl stop/start mosquitto`) for disconnect tests |
 
 ### 2.3 MQTT Topics
@@ -272,31 +273,43 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
     erase_region 0x9000 0x5000
 ```
 
-#### 3.0.2 TC-001: Verify Clean State
+#### 3.0.2 TC-001: Verify Clean State (HTTP)
 
 **Precondition:**
 - TC-000 passed (firmware flashed, NVS erased)
 - DUT reachable: `GET /api/status` → 200 OK
-- MQTT broker running at 192.168.0.203:1883
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Wait for DUT to boot (max 15s) | DUT connects to fallback WiFi (`private-2G`) |
 | 2 | GET /api/status | 200 OK, JSON response |
 | 3 | Check `wifi_ssid` | `private-2G` (credentials.h fallback) |
-| 4 | Check `mqtt_connected` | `true` (default broker 192.168.0.203:1883) |
-| 5 | Check `debug_mode` | `false` |
-| 6 | Check `fw_version` | Matches FW_VERSION in config.h |
-| 7 | Check `uptime` | < 30 (freshly booted) |
-| 8 | Check `free_heap` | > MIN_FREE_HEAP (20000) |
-| 9 | Send `get_config` via MQTT | Response shows all compiled defaults |
-| 10 | Check wallbox_topic | `wallbox` (default) |
-| 11 | Check mqtt_host | `192.168.0.203` (default) |
-| 12 | Check log_level | `1` (INFO, default) |
+| 4 | Check `debug_mode` | `false` |
+| 5 | Check `fw_version` | Matches FW_VERSION in config.h |
+| 6 | Check `uptime` | < 30000 ms (freshly booted; API returns `millis()`) |
+| 7 | Check `free_heap` | > MIN_FREE_HEAP (20000) |
 
-**Pass Criteria**: All fields match compiled defaults. No NVS-stored overrides active.
+**Pass Criteria**: All HTTP status fields match compiled defaults. No NVS-stored overrides active.
 
-**Automation:** pytest, requests, paho-mqtt. Poll /api/status until reachable, validate all fields against known defaults. Publish get_config, verify response matches.
+**Automation:** pytest, requests. Poll /api/status until reachable, validate all fields against known defaults.
+
+#### 3.0.3 TC-002: Verify Clean State (MQTT)
+
+**Precondition:**
+- TC-001 passed (HTTP status verified)
+- MQTT broker running at 192.168.0.203:1883
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Check `mqtt_connected` via /api/status | `true` (default broker 192.168.0.203:1883) |
+| 2 | Send `get_config` via MQTT | Response shows all compiled defaults |
+| 3 | Check wallbox_topic | `wallbox` (default) |
+| 4 | Check mqtt_host | `192.168.0.203` (default) |
+| 5 | Check log_level | `1` (INFO, default) |
+
+**Pass Criteria**: All MQTT config fields match compiled defaults.
+
+**Automation:** pytest, paho-mqtt. Publish get_config, verify response matches compiled defaults.
 
 ### 3.1 Standard Test Cases
 
@@ -998,8 +1011,8 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 ### 5.11 CP-101: Captive Portal WiFi Configuration
 
 **Precondition:**
-- DUT in captive portal mode: `wt.scan()` shows `MODBUS-Proxy-Setup` SSID
-- WiFi Tester available: `wt.get_mode()` responds
+- DUT in captive portal mode (triggered via GPIO): `wt.gpio_set(17, 0)` + `wt.serial_reset(SLOT)` + `wt.gpio_set(17, "z")`
+- Portal AP visible: `wt.scan()` shows `MODBUS-Proxy-Setup` SSID
 - Portal AP joinable: `wt.sta_join("MODBUS-Proxy-Setup", "modbus-setup")` succeeds
 
 | Step | Action | Expected Result |
@@ -1017,8 +1030,8 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 ### 5.12 CP-102: Captive Portal Timeout
 
 **Precondition:**
-- DUT in captive portal mode: `wt.scan()` shows `MODBUS-Proxy-Setup` SSID
-- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"` (for serial monitoring)
+- DUT in captive portal mode (triggered via GPIO): `wt.gpio_set(17, 0)` + `wt.serial_reset(SLOT)` + `wt.gpio_set(17, "z")`
+- Portal AP visible: `wt.scan()` shows `MODBUS-Proxy-Setup` SSID
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -1028,7 +1041,7 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Pass Criteria**: Portal doesn't run indefinitely; 5-minute timeout triggers restart.
 
-**Automation:** pytest, pyserial (RFC2217), WiFi Tester. Trigger portal via GPIO 2 button, wait 5+ minutes, verify DUT restarts (AP disappears, STA reconnects).
+**Automation:** pytest, WiFi Tester (GPIO + serial reset). Trigger portal via `wt.gpio_set(17, 0)` + `wt.serial_reset(SLOT)`, release GPIO, wait 5+ minutes, verify DUT restarts (AP disappears, STA reconnects).
 
 ---
 
@@ -1384,10 +1397,10 @@ pytest test/wifi/ -v -m captive_portal
 - DUT in captive portal mode: `wt.scan()` shows `MODBUS-Proxy-Setup` SSID
 - WiFi Tester can join portal AP: `wt.sta_join("MODBUS-Proxy-Setup", "modbus-setup")` succeeds
 - Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"` (for serial monitoring)
-- Note: entering portal mode requires `wt.human_interaction()` for GPIO 2 button
+- Portal triggered via GPIO: `wt.gpio_set(17, 0)` + `wt.serial_reset(SLOT)`, then `wt.gpio_set(17, "z")`
 
 **Precondition (WIFI-406):**
-- DUT NOT in portal mode (normal boot, GPIO 2 not pressed)
+- DUT NOT in portal mode (normal boot, GPIO not held low)
 - Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
 
 | ID | Test | What it proves |
@@ -1397,7 +1410,7 @@ pytest test/wifi/ -v -m captive_portal
 | WIFI-403 | Full provisioning flow | Portal → submit creds → DUT connects to new AP |
 | WIFI-404 | Portal DNS redirect | Captive portal detection URLs redirect |
 | WIFI-405 | Portal timeout (5 min) | Portal auto-restarts after timeout |
-| WIFI-406 | Normal boot no portal | Reboot without GPIO 2 button doesn't trigger portal |
+| WIFI-406 | Normal boot no portal | Reboot without GPIO held low doesn't trigger portal |
 
 ### 10.5 Credential Management (WIFI-5xx)
 
@@ -1440,32 +1453,27 @@ Tests are classified by their infrastructure requirement and executed in three p
 
 | Category | DUT Network | Human Needed | Infrastructure |
 |----------|-------------|--------------|----------------|
-| **Manual** | Varies | Yes — GPIO 2 button, visual inspection, or special firmware | Serial Portal, WiFi Tester (for portal tests) |
+| **Manual** | Varies | Yes — visual inspection or special firmware | Serial Portal |
 | **Artificial SSID** | WiFi Tester AP (192.168.4.x) | No | Serial Portal, WiFi Tester AP |
 | **Home Network** | private-2G (192.168.0.x) | No | MQTT broker, Serial Portal |
 
-### Phase 1: Manual Tests (8 tests)
+### Phase 1: Manual Tests (5 tests)
 
-Tests requiring human physical action: GPIO 2 button press, visual browser inspection, or special test firmware.
+Tests requiring visual browser inspection or special test firmware. Captive portal tests no longer require manual GPIO button presses — they use Serial Portal GPIO control (`wt.gpio_set(17, 0)` + `wt.serial_reset()`) and run in Phase 2.
 
 | # | Test ID | Name | Manual Action |
 |---|---------|------|---------------|
-| 1 | CP-108¹ | Enter Portal Mode via GPIO 2 Button | Hold GPIO 2 during boot |
-| 2 | CP-101 | Captive Portal WiFi Configuration | Hold GPIO 2 during boot |
-| 3 | CP-102 | Captive Portal Timeout | Hold GPIO 2 during boot |
-| 4 | WEB-101 | Dashboard Power Color Coding | Visual CSS color check in browser |
-| 5 | WEB-109 | mDNS Hostname | Browse to modbus-proxy.local |
-| 6 | EC-113 | Software Watchdog - Task Timeout | Flash test firmware with deliberate hang |
-| 7 | EC-114 | Hardware Watchdog | Flash test firmware / code review |
-| 8 | EC-115 | Critical Memory Watchdog | Flash test firmware with memory exhaust |
-
-¹ CP-108 is not in section 5 but documents the GPIO 2 procedure used as precondition for CP-101 and CP-102.
+| 1 | WEB-101 | Dashboard Power Color Coding | Visual CSS color check in browser |
+| 2 | WEB-109 | mDNS Hostname | Browse to modbus-proxy.local |
+| 3 | EC-113 | Software Watchdog - Task Timeout | Flash test firmware with deliberate hang |
+| 4 | EC-114 | Hardware Watchdog | Flash test firmware / code review |
+| 5 | EC-115 | Critical Memory Watchdog | Flash test firmware with memory exhaust |
 
 **Precondition:** DUT flashed with esp32-c3-debug firmware (TC-000). NVS erased.
 
 **Restore after Phase 1:** Erase NVS and reset DUT to return to private-2G for Phase 3. Or provision DUT onto WiFi Tester AP for Phase 2.
 
-### Phase 2: Artificial SSID Tests (34 tests)
+### Phase 2: Artificial SSID Tests (37 tests)
 
 DUT connects to WiFi Tester AP (isolated network, no internet). All HTTP access via WiFi Tester relay. No human intervention.
 
@@ -1505,14 +1513,17 @@ DUT connects to WiFi Tester AP (isolated network, no internet). All HTTP access 
 | 32 | WIFI-602 | RSSI reported correctly |
 | 33 | WIFI-603 | wifi_ssid matches test AP |
 | 34 | EC-101 | WiFi Disconnect During Operation |
+| | **Captive Portal** | |
+| 35 | CP-101 | Captive Portal WiFi Configuration |
+| 36 | CP-102 | Captive Portal Timeout |
 
 **Precondition:** WiFi Tester AP running. DUT provisioned with test AP credentials.
 
-**Note:** WIFI-401 to WIFI-406 require captive portal mode (GPIO 2 button). When running in Phase 2 (automated), use `wt.human_interaction()` to request the operator hold GPIO 2 before the serial reset.
+**Note:** WIFI-401 to WIFI-406 and CP-101/CP-102 require captive portal mode. Portal is triggered automatically via Serial Portal GPIO control: `wt.gpio_set(17, 0)` holds DUT GPIO 2 low, `wt.serial_reset(SLOT)` reboots into portal, `wt.gpio_set(17, "z")` releases. No human intervention required.
 
 **Restore after Phase 2:** Erase NVS to return DUT to private-2G for Phase 3.
 
-### Phase 3: Home Network Tests (46 tests)
+### Phase 3: Home Network Tests (35 tests)
 
 DUT on private-2G (192.168.0.177), MQTT broker at 192.168.0.203. No WiFi Tester needed. No human intervention.
 
@@ -1520,42 +1531,43 @@ DUT on private-2G (192.168.0.177), MQTT broker at 192.168.0.203. No WiFi Tester 
 |---|---------|------|
 | | **Setup** | |
 | 1 | TC-000 | Flash Firmware and Erase NVS |
-| 2 | TC-001 | Verify Clean State |
+| 2 | TC-001 | Verify Clean State (HTTP) |
+| 3 | TC-002 | Verify Clean State (MQTT) |
 | | **Standard** | |
-| 3 | TC-100 | Basic Startup |
-| 4 | TC-101 | Wallbox Power via MQTT (Plain Float) |
-| 5 | TC-102 | Wallbox Power via MQTT (JSON power key) |
-| 6 | TC-103 | Wallbox Power via MQTT (JSON chargePower key) |
-| 7 | TC-104 | Config Command - get_config |
-| 8 | TC-105 | Config Command - set_wallbox_topic |
-| 9 | TC-106 | Config Command - set_log_level |
-| 10 | TC-107 | Config Command - set_mqtt |
-| 11 | TC-108 | Config Command - factory_reset |
-| 12 | TC-109 | Power Correction Threshold |
-| 13 | TC-110 | Wallbox Data Staleness |
+| 4 | TC-100 | Basic Startup |
+| 5 | TC-101 | Wallbox Power via MQTT (Plain Float) |
+| 6 | TC-102 | Wallbox Power via MQTT (JSON power key) |
+| 7 | TC-103 | Wallbox Power via MQTT (JSON chargePower key) |
+| 8 | TC-104 | Config Command - get_config |
+| 9 | TC-105 | Config Command - set_wallbox_topic |
+| 10 | TC-106 | Config Command - set_log_level |
+| 11 | TC-107 | Config Command - set_mqtt |
+| 12 | TC-108 | Config Command - factory_reset |
+| 13 | TC-109 | Power Correction Threshold |
+| 14 | TC-110 | Wallbox Data Staleness |
 | | **Edge Cases** | |
-| 14 | EC-100 | MQTT Disconnect During Operation |
-| 15 | EC-102 | Malformed Wallbox Power Message |
-| 16 | EC-103 | Malformed Config Command |
-| 17 | EC-104 | Oversized MQTT Message |
-| 18 | EC-105 | Rapid Wallbox Power Updates |
-| 19 | EC-106 | Power Cycle Recovery |
-| 20 | EC-107 | OTA Update |
-| 21 | EC-108 | Concurrent MQTT Publish and Subscribe |
-| 22 | EC-109 | MQTT Reconnect with Config Change |
-| 23 | EC-110 | Log Buffer Overflow |
-| 24 | EC-111 | Empty Wallbox Topic Message |
-| 25 | EC-112 | Special Characters in Config |
-| 26 | EC-116 | Watchdog Survives MQTT Disconnect |
+| 15 | EC-100 | MQTT Disconnect During Operation |
+| 16 | EC-102 | Malformed Wallbox Power Message |
+| 17 | EC-103 | Malformed Config Command |
+| 18 | EC-104 | Oversized MQTT Message |
+| 19 | EC-105 | Rapid Wallbox Power Updates |
+| 20 | EC-106 | Power Cycle Recovery |
+| 21 | EC-107 | OTA Update |
+| 22 | EC-108 | Concurrent MQTT Publish and Subscribe |
+| 23 | EC-109 | MQTT Reconnect with Config Change |
+| 24 | EC-110 | Log Buffer Overflow |
+| 25 | EC-111 | Empty Wallbox Topic Message |
+| 26 | EC-112 | Special Characters in Config |
+| 27 | EC-116 | Watchdog Survives MQTT Disconnect |
 | | **Web UI** | |
-| 27 | WEB-100 | Dashboard Page Loads |
-| 28 | WEB-102 | Status Page System Info |
-| 29 | WEB-103 | Setup Page - Debug Toggle |
-| 30 | WEB-104 | Setup Page - MQTT Configuration |
-| 31 | WEB-105 | Setup Page - Wallbox Topic |
-| 32 | WEB-106 | Setup Page - Factory Reset |
-| 33 | WEB-107 | REST API /api/status |
-| 34 | WEB-108 | Restart via Web UI |
+| 28 | WEB-100 | Dashboard Page Loads |
+| 29 | WEB-102 | Status Page System Info |
+| 30 | WEB-103 | Setup Page - Debug Toggle |
+| 31 | WEB-104 | Setup Page - MQTT Configuration |
+| 32 | WEB-105 | Setup Page - Wallbox Topic |
+| 33 | WEB-106 | Setup Page - Factory Reset |
+| 34 | WEB-107 | REST API /api/status |
+| 35 | WEB-108 | Restart via Web UI |
 **Precondition:** DUT on private-2G with NVS erased (clean state). MQTT broker running.
 
 ### Phase 4: Long Duration Tests (6 tests)
@@ -1577,11 +1589,11 @@ Extended stability tests. Run after all functional tests pass. DUT on private-2G
 
 | Phase | Category | Tests | Human | WiFi Tester | MQTT Broker |
 |-------|----------|------:|:-----:|:-----------:|:-----------:|
-| 1 | Manual | 8 | Yes | Some | No |
-| 2 | Artificial SSID | 34 | GPIO 2 for WIFI-4xx | Yes | No |
-| 3 | Home Network | 34 | No | No | Yes |
+| 1 | Manual | 5 | Yes | No | No |
+| 2 | Artificial SSID | 37 | No | Yes | No |
+| 3 | Home Network | 35 | No | No | Yes |
 | 4 | Long Duration | 6 | No | No | Yes |
-| | **Total** | **82** | | | |
+| | **Total** | **83** | | | |
 
 ---
 
@@ -1601,3 +1613,5 @@ Extended stability tests. Run after all functional tests pass. DUT on private-2G
 | 1.9 | 2026-02-08 | FW v1.2.0: GPIO 2 button replaces boot counter — removed CP-100, CP-103, WIFI-107, WIFI-400; updated boot counter references throughout |
 | 2.0 | 2026-02-09 | Added Appendix A: test classification (Manual / Artificial SSID / Home Network) and execution sequence |
 | 2.1 | 2026-02-09 | Added machine-checkable preconditions to all 82 test cases; expanded LD tests into individual subsections |
+| 2.2 | 2026-02-09 | Split TC-001 into TC-001 (HTTP) and TC-002 (MQTT) so Phase 1 can run without MQTT broker; fixed uptime unit (millis not seconds); 83 test cases |
+| 2.3 | 2026-02-09 | Replace manual GPIO 2 button with Serial Portal GPIO control (Pi GPIO 17 → DUT GPIO 2); CP-101/CP-102 move from Phase 1 (manual) to Phase 2 (automated); WIFI-4xx no longer need human_interaction(); Phase 1 drops from 8 to 5 tests, Phase 2 grows from 34 to 37 |
