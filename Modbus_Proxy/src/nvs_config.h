@@ -39,14 +39,10 @@ struct MQTTConfig {
 #define NVS_KEY_WB_TOPIC "wb_topic"
 #define NVS_KEY_LOG_LEVEL "log_level"
 
-// NVS Keys - Boot and WiFi
-#define NVS_KEY_BOOT_COUNT  "boot_count"
+// NVS Keys - WiFi
 #define NVS_KEY_WIFI_SSID   "wifi_ssid"
 #define NVS_KEY_WIFI_PASS   "wifi_pass"
 #define NVS_KEY_DEBUG_MODE  "debug_mode"
-
-// Boot count threshold for captive portal
-#define BOOT_COUNT_PORTAL_THRESHOLD 3
 
 // Function declarations - MQTT config
 bool initNVSConfig();
@@ -56,11 +52,6 @@ bool saveWallboxTopic(const char* topic);
 bool saveLogLevel(uint8_t level);
 bool resetToDefaults();
 void getDefaultConfig(MQTTConfig& config);
-
-// Function declarations - Boot count
-uint8_t getBootCount();
-void incrementBootCount();
-void resetBootCount();
 
 // Function declarations - WiFi credentials
 bool saveWiFiCredentials(const char* ssid, const char* pass);

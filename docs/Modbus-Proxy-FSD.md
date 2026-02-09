@@ -1,6 +1,6 @@
 # ESP32 MODBUS RTU Intelligent Proxy - Functional Specification Document
 
-**Version:** 5.3
+**Version:** 5.6
 **Date:** February 2026
 **Platform:** ESP32-C3 (single-core RISC-V)
 **Author:** Andreas Spiess / Claude Code
@@ -18,7 +18,7 @@ The ESP32 MODBUS RTU Intelligent Proxy is a sophisticated power monitoring syste
 - **System Reliability**: Comprehensive auto-restart and health monitoring capabilities
 - **Real-time Monitoring**: MQTT-based power data publishing and system health status
 - **OTA Configuration**: Runtime configuration changes via MQTT commands
-- **WiFi Provisioning**: Captive portal for initial WiFi setup (triggered by 3 power cycles)
+- **WiFi Provisioning**: Captive portal for initial WiFi setup (triggered by GPIO 2 button during boot)
 - **Remote Management**: MQTT broker selection and OTA debugging without physical access
 
 ---
@@ -36,6 +36,7 @@ The ESP32 MODBUS RTU Intelligent Proxy is a sophisticated power monitoring syste
 **Pin Configuration:**
 - **SUN2000 Interface**: UART0 (RX=GPIO7, TX=GPIO10)
 - **DTSU-666 Interface**: UART1 (RX=GPIO1, TX=GPIO0)
+- **Portal Button**: GPIO 2 (internal pull-up, active LOW)
 
 **Task Distribution:**
 - **Single Core**: All tasks (MQTT Priority 1, Proxy Priority 2, Watchdog Priority 3)
@@ -429,27 +430,36 @@ python3 -m esptool --chip esp32c3 \
 
 ### 13.1 Purpose
 
-Allows initial WiFi configuration without reflashing firmware. The captive portal is intentionally difficult to trigger to prevent accidental credential loss during network outages.
+Allows initial WiFi configuration without reflashing firmware. The captive portal requires a deliberate physical action (button press during boot) to prevent accidental activation during network outages.
 
 ### 13.2 Activation Mechanism
 
-**3 Power Cycle Trigger**:
-1. On each boot, increment a "boot counter" in NVS
-2. Attempt WiFi connection with stored credentials
-3. If WiFi connects successfully within 30 seconds, reset boot counter to 0
-4. If boot counter reaches 3 (three consecutive failed boots), enter AP/captive portal mode
+**GPIO 2 Button Trigger**:
+1. At boot, read GPIO 2 (internal pull-up, active LOW)
+2. If GPIO 2 is LOW (button pressed): enter AP/captive portal mode
+3. If GPIO 2 is HIGH (normal): attempt WiFi connection with stored credentials
 
-**Why 3 Power Cycles?**
-- Prevents accidental portal activation during temporary network outages
-- Device will keep retrying WiFi during outages (counter resets on success)
-- Only intentional "I need to reconfigure" scenarios trigger portal
-- User must deliberately power cycle 3 times to enter config mode
+**Why a physical button?**
+- Deterministic: portal activates if and only if the button is held during boot
+- No NVS state to manage (no boot counter, no reset-on-success logic)
+- Immune to power outages: device simply restarts and retries WiFi, never enters portal accidentally
+- User must deliberately hold the button during power-on to enter config mode
 
-### 13.3 Captive Portal Behavior
+### 13.3 WiFi/MQTT Recovery (Normal Boot)
+
+When GPIO 2 is not pressed (normal boot):
+1. Attempt WiFi connection with stored credentials (NVS or compiled defaults)
+2. If WiFi connects: start MQTT, web server, and Modbus proxy as normal
+3. If WiFi or MQTT fails to connect within **60 seconds**: `ESP.restart()`
+4. On restart, retry from step 1 — the device never enters captive portal without the button
+
+This ensures automatic recovery from transient WiFi/MQTT outages without human intervention, while preventing the device from getting stuck in a non-functional state.
+
+### 13.4 Captive Portal Behavior
 
 **AP Mode Configuration**:
 - **SSID**: "MODBUS-Proxy-Setup"
-- **Password**: None (open network)
+- **Password**: "modbus-setup" (WPA2-PSK)
 - **IP Address**: 192.168.4.1
 - **DNS**: Captive portal redirect
 
@@ -457,12 +467,13 @@ Allows initial WiFi configuration without reflashing firmware. The captive porta
 - WiFi SSID selection (scan available networks)
 - WiFi password entry
 - Save and restart button
+- On successful save: device restarts in normal STA mode
 
 **Portal Timeout**:
 - 5 minutes of inactivity triggers restart
-- Restart attempts normal WiFi connection
+- On restart: GPIO 2 is re-read; if still pressed, portal re-opens; if released, normal boot
 
-### 13.4 Configuration Scope
+### 13.5 Configuration Scope
 
 The captive portal configures **WiFi credentials only**:
 - WiFi SSID
@@ -474,11 +485,10 @@ The captive portal configures **WiFi credentials only**:
 - Wallbox topic
 - Log level
 
-### 13.5 NVS Storage for Provisioning
+### 13.6 NVS Storage for Provisioning
 
 | Key | Type | Description |
 |-----|------|-------------|
-| boot_count | uint8 | Failed boot counter (0-3) |
 | wifi_ssid | string | WiFi network name (64 chars) |
 | wifi_pass | string | WiFi password (64 chars) |
 | provisioned | bool | WiFi credentials have been set |
@@ -716,7 +726,6 @@ Response on `MBUS-PROXY/debug/dump`:
   "min_heap": 178000,
   "wifi_rssi": -65,
   "mqtt_state": "connected",
-  "boot_count": 0,
   "last_modbus_rx": 1234,
   "last_wallbox_rx": 5678,
   "correction_active": false,
@@ -783,9 +792,10 @@ The MQTT log level (runtime, Section 6.3) and serial debug level (compile-time) 
 
 ### 17.3 Web UI & Provisioning Tests
 
-- ⬜ Captive portal activation (3 power cycles)
-- ⬜ Captive portal WiFi configuration and restart
-- ⬜ Boot counter reset on successful WiFi connection
+- ✅ Captive portal activation (GPIO 2 button held during boot)
+- ✅ Captive portal WiFi configuration and restart
+- ✅ Normal boot without button does not trigger portal
+- ✅ WiFi/MQTT failure restarts after 60s without entering portal
 - ✅ Web UI Dashboard - wallbox power display with color coding
 - ✅ Web UI Dashboard - status indicators (MQTT/DTSU/SUN2000)
 - ✅ Web UI Dashboard - power grid (DTSU/Correction/SUN2000)
@@ -806,6 +816,56 @@ The MQTT log level (runtime, Section 6.3) and serial debug level (compile-time) 
 - ✅ Automated integration tests (58 tests via `pytest`)
 - ⬜ OTA debug output via MQTT
 - ⬜ Debug dump command via MQTT
+
+### 17.4 Test Infrastructure
+
+All tests run on an isolated artificial network hosted by the Serial Portal Pi (192.168.0.87). No dependency on the home network (`private-2G`) or production MQTT broker (192.168.0.203) is required for testing.
+
+**Network Architecture:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  Serial Portal Pi (192.168.0.87)                                │
+│                                                                 │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌───────────────┐ │
+│  │ WiFi Tester AP   │  │ Serial Portal    │  │ mosquitto     │ │
+│  │ hostapd on wlan0 │  │ RFC2217 server   │  │ MQTT broker   │ │
+│  │ SSID: WiFi-Tester│  │ port 4001+       │  │ port 1883     │ │
+│  │ 192.168.4.1      │  │                  │  │ 192.168.4.1   │ │
+│  └────────┬─────────┘  └──────────────────┘  └───────┬───────┘ │
+│           │ WiFi (192.168.4.x subnet)                │         │
+│           ▼                                          ▼         │
+│  ┌──────────────────┐                                          │
+│  │ ESP32-C3 DUT     │◄──── MQTT via 192.168.4.1:1883 ─────────│
+│  │ 192.168.4.x      │                                          │
+│  └──────────────────┘                                          │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**MQTT Broker (mosquitto 2.0.21):**
+
+| Property | Value |
+|----------|-------|
+| Host | Serial Portal Pi (192.168.0.87) |
+| Version | mosquitto 2.0.21 |
+| Config file | `/etc/mosquitto/conf.d/test-broker.conf` |
+| Listen address | `0.0.0.0:1883` (all interfaces) |
+| Test network address | `192.168.4.1:1883` (via WiFi Tester AP) |
+| Authentication | Username `admin`, password `admin` (password file: `/etc/mosquitto/passwd`) |
+| Anonymous access | Allowed |
+| Auto-start | `systemctl enable mosquitto` (starts on boot) |
+| Manual restart | `ssh pi@192.168.0.87 sudo systemctl restart mosquitto` |
+
+The broker is accessible at `192.168.4.1:1883` from the test network (WiFi Tester AP subnet) and at `192.168.0.87:1883` from the home LAN. During testing the DUT connects via `192.168.4.1`, the same address as the WiFi Tester AP gateway.
+
+**Test workflow** (see test spec for full details):
+1. DUT is flashed and NVS-erased via RFC2217 serial
+2. DUT boots, fails to connect to compiled fallback SSID (`private-2G`, not available on test network)
+3. Captive portal is triggered via GPIO, DUT is provisioned with WiFi Tester AP credentials
+4. MQTT broker is configured to `192.168.4.1:1883` via `set_mqtt` command
+5. All MQTT tests (subscribe, publish, config commands, disconnect/reconnect) run against the Pi broker
+
+For detailed test procedures, see the [Test Specification](modbus-proxy-test-spec.md).
 
 ---
 
@@ -850,10 +910,15 @@ See DTSU-666 datasheet for complete register definitions (2102-2181)
 3. **Power correction not working**: Check wallbox topic, verify data format
 4. **OTA fails**: Check WiFi signal strength, verify password
 5. **Config not saving**: NVS may be full, try factory_reset command
+6. **NVS save returns false despite data being written**: ESP32 `Preferences::putString()` returns `size_t` (bytes stored), not `bool`. Using `success &= putString(...)` performs bitwise AND (`1 & 4 = 0`), incorrectly returning false. Use `success = success && putString(...)` instead.
+7. **NVS init fails with "already open"**: `Preferences::begin()` returns false if called twice on the same instance. Ensure `loadConfig()` manages its own `begin()`/`end()` lifecycle.
 
 ---
 
 **Document Version History**:
+- v5.6 (February 2026): Added test infrastructure section (17.4) documenting isolated artificial network with Pi-hosted mosquitto broker (192.168.4.1:1883); all tests run on WiFi Tester AP, no dependency on home network
+- v5.5 (February 2026): GPIO 2 button trigger replaces 3-power-cycle boot counter for captive portal activation; 60-second WiFi/MQTT recovery restart (no portal on failure); removed boot_count from NVS
+- v5.4 (February 2026): WPA2 captive portal (password "modbus-setup"), NVS bug fixes (`&=` bitwise AND with `putString()` return value, double-open in `initNVSConfig()`), boot count reset after portal WiFi save, captive portal tests passing
 - v5.3 (February 2026): RFC2217 serial flashing without buttons (plain RFC2217 server for C3 native USB), Serial Portal integration
 - v5.2 (February 2026): HTTP OTA with Bearer auth (replaces ArduinoOTA as primary), test injection endpoint, fw_version in /api/status, automated test coverage (77 unit + 58 integration)
 - v5.1 (February 2026): Updated Web UI section to match implemented 3-page layout (Dashboard/Status/Setup), documented REST API responses, added mDNS and library versions

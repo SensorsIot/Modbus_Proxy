@@ -82,13 +82,13 @@ bool enterCaptivePortalMode() {
   WiFi.mode(WIFI_AP);
   WiFi.softAPConfig(CAPTIVE_PORTAL_IP, CAPTIVE_PORTAL_GATEWAY, CAPTIVE_PORTAL_SUBNET);
 
-  if (!WiFi.softAP(CAPTIVE_PORTAL_SSID)) {
+  if (!WiFi.softAP(CAPTIVE_PORTAL_SSID, CAPTIVE_PORTAL_PASS)) {
     DEBUG_PRINTLN("Failed to start AP");
     return false;
   }
 
-  DEBUG_PRINTF("AP Started: SSID=%s, IP=%s\n",
-               CAPTIVE_PORTAL_SSID,
+  DEBUG_PRINTF("AP Started: SSID=%s, Pass=%s, IP=%s\n",
+               CAPTIVE_PORTAL_SSID, CAPTIVE_PORTAL_PASS,
                WiFi.softAPIP().toString().c_str());
 
   // Start DNS server to redirect all requests

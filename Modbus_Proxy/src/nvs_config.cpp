@@ -23,15 +23,8 @@ void getDefaultConfig(MQTTConfig& config) {
 }
 
 bool initNVSConfig() {
-  if (!preferences.begin(NVS_NAMESPACE, false)) {
-    DEBUG_PRINTLN("Failed to open NVS namespace");
-    getDefaultConfig(mqttConfig);
-    configLoaded = true;
-    return false;
-  }
-
+  // Just delegate to loadConfig which manages its own begin/end
   bool result = loadConfig(mqttConfig);
-  preferences.end();
   configLoaded = true;
   return result;
 }
@@ -85,24 +78,24 @@ bool saveMQTTCredentials(const char* host, uint16_t port, const char* user, cons
   bool success = true;
 
   if (host && strlen(host) > 0) {
-    success &= preferences.putString(NVS_KEY_MQTT_HOST, host);
+    success = success && preferences.putString(NVS_KEY_MQTT_HOST, host);
     strncpy(mqttConfig.host, host, sizeof(mqttConfig.host) - 1);
     mqttConfig.host[sizeof(mqttConfig.host) - 1] = '\0';
   }
 
   if (port > 0) {
-    success &= preferences.putUShort(NVS_KEY_MQTT_PORT, port);
+    success = success && preferences.putUShort(NVS_KEY_MQTT_PORT, port);
     mqttConfig.port = port;
   }
 
   if (user && strlen(user) > 0) {
-    success &= preferences.putString(NVS_KEY_MQTT_USER, user);
+    success = success && preferences.putString(NVS_KEY_MQTT_USER, user);
     strncpy(mqttConfig.user, user, sizeof(mqttConfig.user) - 1);
     mqttConfig.user[sizeof(mqttConfig.user) - 1] = '\0';
   }
 
   if (pass && strlen(pass) > 0) {
-    success &= preferences.putString(NVS_KEY_MQTT_PASS, pass);
+    success = success && preferences.putString(NVS_KEY_MQTT_PASS, pass);
     strncpy(mqttConfig.pass, pass, sizeof(mqttConfig.pass) - 1);
     mqttConfig.pass[sizeof(mqttConfig.pass) - 1] = '\0';
   }
@@ -176,38 +169,6 @@ bool resetToDefaults() {
   return success;
 }
 
-// Boot count functions
-uint8_t getBootCount() {
-  if (!preferences.begin(NVS_NAMESPACE, true)) {
-    return 0;
-  }
-  uint8_t count = preferences.getUChar(NVS_KEY_BOOT_COUNT, 0);
-  preferences.end();
-  return count;
-}
-
-void incrementBootCount() {
-  if (!preferences.begin(NVS_NAMESPACE, false)) {
-    DEBUG_PRINTLN("Failed to open NVS for boot count increment");
-    return;
-  }
-  uint8_t count = preferences.getUChar(NVS_KEY_BOOT_COUNT, 0);
-  count++;
-  preferences.putUChar(NVS_KEY_BOOT_COUNT, count);
-  preferences.end();
-  DEBUG_PRINTF("Boot count incremented to: %d\n", count);
-}
-
-void resetBootCount() {
-  if (!preferences.begin(NVS_NAMESPACE, false)) {
-    DEBUG_PRINTLN("Failed to open NVS for boot count reset");
-    return;
-  }
-  preferences.putUChar(NVS_KEY_BOOT_COUNT, 0);
-  preferences.end();
-  DEBUG_PRINTLN("Boot count reset to 0");
-}
-
 // WiFi credentials functions
 bool saveWiFiCredentials(const char* ssid, const char* pass) {
   if (!ssid || strlen(ssid) == 0) {
@@ -220,11 +181,11 @@ bool saveWiFiCredentials(const char* ssid, const char* pass) {
   }
 
   bool success = true;
-  success &= preferences.putString(NVS_KEY_WIFI_SSID, ssid);
+  success = success && preferences.putString(NVS_KEY_WIFI_SSID, ssid);
   if (pass) {
-    success &= preferences.putString(NVS_KEY_WIFI_PASS, pass);
+    success = success && preferences.putString(NVS_KEY_WIFI_PASS, pass);
   } else {
-    success &= preferences.putString(NVS_KEY_WIFI_PASS, "");
+    success = success && preferences.putString(NVS_KEY_WIFI_PASS, "");
   }
 
   preferences.end();

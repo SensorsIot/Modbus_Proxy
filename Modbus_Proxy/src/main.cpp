@@ -102,14 +102,15 @@ void setup() {
         DEBUG_PRINTLN("NVS init failed, using defaults");
     }
 
-    // Boot count check for captive portal trigger
-    uint8_t bootCount = getBootCount();
-    incrementBootCount();
-    DEBUG_PRINTF("Boot count: %d (threshold: %d)\n", bootCount + 1, BOOT_COUNT_PORTAL_THRESHOLD);
+    // GPIO 2 button check for captive portal trigger
+    pinMode(PORTAL_BUTTON_PIN, INPUT_PULLUP);
+    delay(10);  // Allow pull-up to stabilize
+    bool portalButtonPressed = (digitalRead(PORTAL_BUTTON_PIN) == LOW);
+    DEBUG_PRINTF("Portal button (GPIO%d): %s\n", PORTAL_BUTTON_PIN, portalButtonPressed ? "PRESSED" : "released");
 
-    if (bootCount + 1 >= BOOT_COUNT_PORTAL_THRESHOLD) {
+    if (portalButtonPressed) {
         DEBUG_PRINTLN("\n*** CAPTIVE PORTAL MODE TRIGGERED ***");
-        DEBUG_PRINTLN("3 rapid reboots detected, entering WiFi setup mode...\n");
+        DEBUG_PRINTLN("Portal button held during boot, entering WiFi setup mode...\n");
 
         // Initialize WiFi manager and enter AP mode
         initWiFiManager();
@@ -133,7 +134,6 @@ void setup() {
             }
         } else {
             DEBUG_PRINTLN("Failed to start captive portal, continuing normal boot...");
-            resetBootCount();
         }
     }
 
@@ -163,9 +163,7 @@ void setup() {
     WiFiState wifiState = connectWiFi(WIFI_CONNECT_TIMEOUT_MS);
 
     if (wifiState == WIFI_STATE_CONNECTED) {
-        // Success - reset boot counter
-        resetBootCount();
-        DEBUG_PRINTLN("WiFi connected, boot counter reset");
+        DEBUG_PRINTLN("WiFi connected");
 
         // Start mDNS responder
         if (MDNS.begin("modbus-proxy")) {
@@ -183,9 +181,9 @@ void setup() {
             delay(200);
         }
     } else {
-        // WiFi failed - restart (boot counter already incremented)
-        DEBUG_PRINTLN("WiFi connection failed, restarting...");
-        delay(1000);
+        // WiFi failed - restart after recovery timeout (never enters portal without button)
+        DEBUG_PRINTF("WiFi failed, restarting in %d seconds...\n", WIFI_MQTT_RECOVERY_TIMEOUT_MS / 1000);
+        delay(WIFI_MQTT_RECOVERY_TIMEOUT_MS);
         ESP.restart();
     }
 

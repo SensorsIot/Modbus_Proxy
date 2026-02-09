@@ -1,7 +1,7 @@
 #pragma once
 
 // Firmware version
-#define FW_VERSION "1.1.0"
+#define FW_VERSION "1.2.0"
 
 // Serial debug level: 0=OFF, 1=INFO, 2=DEBUG
 #ifndef SERIAL_DEBUG_LEVEL
@@ -13,6 +13,9 @@
 #define RS485_SUN2000_TX_PIN 10
 #define RS485_DTU_RX_PIN 1
 #define RS485_DTU_TX_PIN 0
+
+// Portal button pin (GPIO2, internal pull-up, active LOW)
+#define PORTAL_BUTTON_PIN 2
 
 // Status LED pin (GPIO8, inverted logic - LOW=ON, HIGH=OFF)
 #define STATUS_LED_PIN 8
@@ -112,8 +115,10 @@ const uint32_t MIN_FREE_HEAP = 20000;
 // Web server settings
 #define WEB_SERVER_PORT 80
 #define CAPTIVE_PORTAL_SSID "MODBUS-Proxy-Setup"
+#define CAPTIVE_PORTAL_PASS "modbus-setup"
 #define CAPTIVE_PORTAL_IP IPAddress(192, 168, 4, 1)
 #define CAPTIVE_PORTAL_GATEWAY IPAddress(192, 168, 4, 1)
 #define CAPTIVE_PORTAL_SUBNET IPAddress(255, 255, 255, 0)
 #define CAPTIVE_PORTAL_TIMEOUT_MS 300000  // 5 minutes
 #define WIFI_CONNECT_TIMEOUT_MS 30000     // 30 seconds
+#define WIFI_MQTT_RECOVERY_TIMEOUT_MS 60000  // 60 seconds - restart if no WiFi/MQTT

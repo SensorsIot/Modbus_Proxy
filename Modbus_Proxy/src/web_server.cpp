@@ -324,16 +324,19 @@ void handleApiScan(AsyncWebServerRequest *request) {
 }
 
 void handleApiWifi(AsyncWebServerRequest *request, uint8_t *data, size_t len) {
+  DEBUG_PRINTF("[WIFI-API] Body received: %d bytes\n", (int)len);
   StaticJsonDocument<256> doc;
   DeserializationError error = deserializeJson(doc, data, len);
 
   if (error) {
+    DEBUG_PRINTF("[WIFI-API] JSON parse error: %s\n", error.c_str());
     request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"Invalid JSON\"}");
     return;
   }
 
   const char* ssid = doc["ssid"] | "";
   const char* password = doc["password"] | "";
+  DEBUG_PRINTF("[WIFI-API] SSID='%s', pass len=%d\n", ssid, (int)strlen(password));
 
   if (strlen(ssid) == 0) {
     request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"SSID required\"}");
@@ -346,6 +349,7 @@ void handleApiWifi(AsyncWebServerRequest *request, uint8_t *data, size_t len) {
     delay(1000);
     ESP.restart();
   } else {
+    DEBUG_PRINTLN("[WIFI-API] saveWiFiCredentials FAILED");
     request->send(500, "application/json", "{\"status\":\"error\",\"message\":\"Failed to save\"}");
   }
 }
