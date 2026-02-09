@@ -4,10 +4,11 @@
 
 | Field | Value |
 |-------|-------|
-| Version | 3.0 |
+| Version | 4.1 |
 | Status | Draft |
+| Author | SensorsIot |
 | Created | 2026-02-05 |
-| Related | Modbus-Proxy FSD v5.5 |
+| Related | Modbus-Proxy FSD v5.6 |
 
 ## 1. Overview
 
@@ -44,47 +45,57 @@ This document specifies test cases for the Modbus_Proxy firmware, which acts as 
 9. **Captive Portal**: WiFi provisioning via AP mode (GPIO trigger via Serial Portal)
 10. **mDNS**: Hostname advertisement (modbus-proxy.local)
 
-### 1.3 Test Suite at a Glance
+### 1.3 Test Strategy
 
-The project has **168 automated tests** (run without human intervention) and **48 verification tests** (43 automatable, 5 manual). Together they verify that the proxy reads meter data correctly, adjusts it for wallbox charging, survives network failures, and can be configured remotely.
+Testing uses two complementary approaches:
 
-#### Automated Tests — 168 total
+**Automated test suites** are executable tests you *run* (`pio test`, `pytest`). All 171 tests execute without human intervention; the runner reports pass/fail. They catch regressions on every code change.
 
-Run on every code change to catch regressions immediately.
+**Test case specifications** are the 79 test cases defined in §3–§13. Each specifies preconditions, step-by-step actions, and machine-checkable pass criteria. Most are implemented by the automated suites above; 3 are verified by code review only (EC-113/114/115 — watchdog fault paths not triggerable externally). The specifications define *what* is verified and *why*, independent of the test code.
 
-| Category | Tests | What it proves in plain English |
-|----------|------:|--------------------------------|
-| **Data Accuracy** (float conversion + DTSU parsing) | 38 | The device reads and writes meter values correctly — like checking a calculator always gives the right answer. |
-| **Transmission Integrity** (CRC validation) | 11 | Data isn't corrupted on the wire — the same checksum principle banks use to detect transfer errors. |
-| **Power Correction Math** | 16 | Wallbox charging power is correctly added to meter readings so the inverter sees true household consumption. |
-| **Configuration & Defaults** | 12 | The device starts with sensible settings and stores them reliably across reboots. |
-| **Web API** (REST endpoints) | 22 | The web interface provides correct status data and accepts configuration changes without errors. |
-| **Network Messaging** (MQTT) | 18 | Wallbox power arrives correctly over WiFi, bad messages are rejected, and configuration commands work. |
-| **End-to-End Pipeline** (test injection) | 16 | The complete data flow — meter reading through correction to inverter output — produces the right result, verified without needing physical Modbus hardware. |
-| **OTA Security** | 4 | Firmware updates require the correct password; unauthorized uploads are rejected. |
-| **WiFi Integration** (via WiFi Tester) | 33 | The device connects, reconnects after dropout, handles bad credentials, enters captive portal, and serves all endpoints on an isolated test network. |
+The two overlap intentionally: the automated suites *implement* most specifications, so running `pytest` also executes the verification tests.
+
+#### Automated Test Suites — 171 tests
+
+| Suite | Tests | Runner | Hardware needed |
+|-------|------:|--------|-----------------|
+| Unit tests | 77 | `pio test -e unit-test` | None (host-side) |
+| Integration tests | 59 | `pytest test/integration/ -v` | Live DUT on network |
+| WiFi tests | 35 | `pytest test/wifi/ -v` | WiFi Tester + DUT on test AP |
 
 **How to run:**
 ```
 pio test -e unit-test                 # 77 unit tests (no hardware, seconds)
-pytest test/integration/ -v           # 58 integration tests (needs live device)
-pytest test/wifi/ -v                  # 33 WiFi tests (needs WiFi Tester hardware)
+pytest test/integration/ -v           # 59 integration tests (needs live device)
+pytest test/wifi/ -v                  # 35 WiFi tests (needs WiFi Tester hardware)
 pytest test/wifi/ -m "not captive_portal"  # WiFi tests without slow portal tests
 ```
 
-#### Verification Tests — 48 total
+#### Test Case Specifications — 79 test cases
 
-These tests verify the running device via external interfaces. **All 45 runtime tests are fully automated** using pytest with MQTT, HTTP, RFC2217 serial, WiFi Tester GPIO, and mDNS resolution. **3 watchdog fault tests** (EC-113/114/115) are verified by code review since the fault conditions cannot be triggered via external interfaces.
+Defined in §3–§13, organized by execution order. Phase 1 covers functional behaviour (§3–§12), Phase 2 covers long-duration stability (§13). Every test case follows the same structure:
 
-| Category | Tests | Auto | Code Review | Tools needed |
-|----------|------:|-----:|------------:|-------------|
-| **Standard Tests** (TC-100 to TC-110) | 11 | 11 | 0 | pytest, paho-mqtt, requests |
-| **Edge Cases** (EC-100 to EC-116) | 17 | 14 | 3 | pytest, paho-mqtt, requests, pyserial (RFC2217), WiFi Tester, SSH |
-| **Web UI** (WEB-100 to WEB-109) | 10 | 10 | 0 | pytest, requests, subprocess (avahi) |
-| **Captive Portal** (CP-101 to CP-102) | 2 | 2 | 0 | pytest, WiFi Tester (GPIO + serial reset) |
-| **Long Duration** (LD-001 to LD-006) | 6 | 6 | 0 | pytest, paho-mqtt, requests |
+- **Precondition** — machine-checkable conditions that must hold before the test starts (e.g. `wt.ap_status()["active"] == True`). A test runner can assert these programmatically.
+- **Step table** (Step / Action / Expected Result) — numbered sequence of actions with concrete expected outcomes. Each expected result is observable via HTTP, MQTT, serial, or filesystem.
+- **Pass Criteria** — one-sentence summary of what constitutes a pass.
+- **Automation notes** — tools, commands, or scripts needed to run the test without human intervention.
 
-**Code review only:** EC-113 / EC-114 / EC-115 — watchdog fault recovery paths cannot be triggered externally; verified by code review and indirectly validated by EC-116 (watchdog survives MQTT disconnect) and LD-005 (24h watchdog stability).
+| Section | Tests | What it covers |
+|---------|------:|----------------|
+| §3 Setup | 3 | Flash, provision, verify clean state |
+| §4 WiFi Connectivity | 7 | Connect, DHCP, mDNS, web access, WPA2, open network |
+| §5 WiFi Reconnection | 6 | Dropout recovery, reset cycles, heap stability |
+| §6 Invalid Credentials | 4 | Wrong password/SSID, empty password, recovery |
+| §7 Captive Portal | 8 | Portal UI, scan, provisioning, DNS redirect, timeout |
+| §8 WiFi Credentials | 6 | NVS persistence, factory reset, long SSID, special chars |
+| §9 MQTT & Modbus | 11 | Wallbox power, config commands, threshold, staleness |
+| §10 REST API via WiFi | 4 | API via relay, OTA health, RSSI, SSID |
+| §11 Edge Cases | 17 | Disconnects, malformed data, OTA, watchdog (14 auto + 3 code review) |
+| §12 Web UI | 10 | Dashboard, status, setup pages, REST API, mDNS |
+| §13 Long Duration | 3 | 24h load, 8h resilience, 24h idle |
+| **Total** | **79** | **76 runtime + 3 code review** |
+
+**Code review only:** EC-113 / EC-114 / EC-115 — watchdog fault recovery paths cannot be triggered externally; verified by code review and indirectly validated by EC-116 (watchdog survives MQTT disconnect) and LD-001 (24h sustained operation).
 
 ## 2. Test Environment
 
@@ -105,7 +116,7 @@ The following services are **always-on infrastructure** — tests must NEVER sta
 | Service | Why |
 |---------|-----|
 | Serial Portal (`rfc2217-portal`) | Provides RFC2217 serial access to all slots. Stopping it kills serial access for all devices, not just the DUT. |
-| MQTT Broker (`mosquitto`) | Shared service; only EC-100/EC-110/LD-006 may stop/start it as part of their specific disconnect tests. |
+| MQTT Broker (`mosquitto`) | Shared service; only EC-100/EC-110/LD-002 may stop/start it as part of their specific disconnect tests. |
 
 **Tests are consumers of infrastructure, not managers of it.** If a test needs the portal or broker in a specific state, it is a precondition — not a test step.
 
@@ -118,28 +129,7 @@ The DUT always starts the test suite in a **well-defined clean state**:
 - **Firmware is freshly flashed** — bootloader + partitions + application at correct offsets
 - **Device has just booted** — first boot after NVS erase; fallback SSID (`private-2G`) is unavailable on the artificial network, so DUT retries WiFi indefinitely until provisioned via captive portal
 
-This state is established by TC-000 (flash + erase + provision). On the artificial network, the setup sequence is:
-
-1. Flash firmware and erase NVS
-2. DUT boots, tries fallback SSID `private-2G` (unavailable → WiFi retry loop)
-3. Trigger captive portal via GPIO 2 (Pi GPIO 17 LOW + serial reset)
-4. Provision DUT with test AP SSID via portal `/api/wifi`
-5. Configure MQTT host to Pi broker (192.168.4.1) via `set_mqtt` command
-6. Verify WiFi + MQTT connected → clean state ready
-
-**How to reach the clean state:**
-
-```bash
-# Erase NVS partition (0x9000, 20K) — wipes WiFi creds, MQTT config, debug mode
-python3 esptool.py --port "rfc2217://192.168.0.87:4001" --chip esp32c3 \
-    --baud 921600 erase_region 0x9000 0x5000
-
-# Device resets automatically after erase. On first boot with empty NVS:
-#   - WiFi: falls back to credentials.h (private-2G) — unavailable on test AP
-#   - MQTT: uses compiled defaults (192.168.4.1:1883)
-#   - Debug mode: off
-# Then provision via captive portal with test AP credentials and set MQTT host.
-```
+This state is established by TC-000 (flash + NVS erase) and TC-001 (captive portal provisioning). See those test cases in §3 for the exact procedure and commands.
 
 **Partition layout (for reference):**
 
@@ -196,11 +186,24 @@ python3 esptool.py --port "rfc2217://192.168.0.87:4001" --chip esp32c3 \
 
 | Test File | Tests | Description |
 |-----------|-------|-------------|
-| `test_rest_api.py` | ~22 | REST API endpoints: status, config, debug, 404 |
-| `test_mqtt.py` | ~18 | MQTT wallbox messages, config commands, edge cases |
-| `test_inject.py` | ~16 | Test injection endpoint: pipeline validation, correction, access control |
+| `test_rest_api.py` | 27 | REST API endpoints: status, config, debug, OTA auth, restart |
+| `test_mqtt.py` | 16 | MQTT wallbox messages, config commands, edge cases |
+| `test_inject.py` | 16 | Test injection endpoint: pipeline validation, correction, access control |
 
 **Run:** `pip install -r test/integration/requirements.txt && pytest test/integration/ -v`
+
+#### WiFi Tests (Python, requires WiFi Tester hardware)
+
+| Test File | Tests | Description |
+|-----------|-------|-------------|
+| `test_wifi_connect.py` | 8 | Connect, DHCP, mDNS, web access, WPA2, open network |
+| `test_captive_portal.py` | 7 | Portal page, scan, provisioning, DNS redirect, timeout |
+| `test_wifi_reconnect.py` | 6 | Dropout recovery, reset cycles, heap stability |
+| `test_wifi_mgmt.py` | 6 | Credential persistence, factory reset, special chars |
+| `test_wifi_services.py` | 4 | REST API via relay, OTA health, RSSI, SSID |
+| `test_wifi_creds.py` | 4 | Wrong password/SSID, empty password, recovery |
+
+**Run:** `pip install -r test/wifi/requirements.txt && pytest test/wifi/ -v`
 
 ### 2.5 Test Injection Endpoint
 
@@ -235,13 +238,11 @@ The firmware includes a debug-only REST endpoint `POST /api/test/inject` that si
 
 **Security:** Returns HTTP 403 when debug mode is disabled. Not compiled out — the guard is a runtime check, keeping the binary identical for test and production.
 
-## 3. Test Cases
-
-### 3.0 Setup Test Cases
+## 3. Setup Tests
 
 These run first, in order, to establish and verify the clean DUT state before any functional tests.
 
-#### 3.0.1 TC-000: Flash Firmware and Erase NVS
+### TC-000: Flash Firmware and Erase NVS
 
 **Precondition:**
 - Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
@@ -280,7 +281,7 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
     erase_region 0x9000 0x5000
 ```
 
-#### 3.0.2 TC-001: Provision DUT on Test Network
+### TC-001: Provision DUT on Test Network
 
 **Precondition:**
 - TC-000 passed (firmware flashed, NVS erased)
@@ -305,7 +306,7 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Automation:** pytest using WiFi Tester driver + paho-mqtt.
 
-#### 3.0.3 TC-002: Verify Clean State
+### TC-002: Verify Clean State
 
 **Precondition:**
 - TC-001 passed (DUT provisioned on test AP, MQTT connected to Pi broker)
@@ -326,9 +327,653 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Automation:** pytest, WiFi Tester relay + paho-mqtt via Pi broker.
 
-### 3.1 Standard Test Cases
+## 4. WiFi Connectivity Tests (WIFI-1xx)
 
-#### 3.1.1 TC-100: Basic Startup
+These tests verify the DUT connects to a WiFi Tester AP, obtains an IP, advertises mDNS, and serves its web interface on the isolated test network.
+
+**Run:**
+```bash
+pip install -r test/wifi/requirements.txt
+pip install -e <path-to-Wifi-Tester>/pytest  # WiFi Tester driver
+
+# All WiFi tests
+WIFI_TESTER_URL=http://192.168.0.87:8080 pytest test/wifi/ -v
+
+# Skip slow captive portal tests
+pytest test/wifi/ -v -m "not captive_portal"
+
+# Only captive portal tests
+pytest test/wifi/ -v -m captive_portal
+```
+
+### WIFI-100: Connect to Test AP
+
+**Precondition:**
+- WiFi Tester reachable: `wt.get_mode()` responds
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
+- DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
+- WiFi Tester AP stopped: `wt.ap_status()["active"] == False`
+- Generate random SSID and password for this test run
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Trigger captive portal: `wt.gpio_set(17, 0)`, `wt.serial_reset(SLOT)` | Serial output contains `CAPTIVE PORTAL MODE TRIGGERED` |
+| 2 | Release GPIO: `wt.gpio_set(17, "z")` | Pin released to input with pull-up |
+| 3 | Join portal AP: `wt.sta_join("MODBUS-Proxy-Setup", "modbus-setup")` | Connected to portal AP |
+| 4 | Submit random credentials: `wt.http_post("http://192.168.4.1/api/wifi", json_data={"ssid": SSID, "password": PASS})` | 200 OK |
+| 5 | Leave portal: `wt.sta_leave()` | AP auto-restores |
+| 6 | Start test AP with random credentials: `wt.ap_start(SSID, PASS)` | AP active |
+| 7 | Wait for DUT to connect: `wt.wait_for_station(timeout=30)` | DUT appears as station |
+| 8 | Check DUT WiFi SSID via relay: `wt.http_get("http://<DUT_IP>/api/status")` → `wifi_ssid` | Matches random SSID |
+
+**Pass Criteria:** DUT connects to the test AP using provisioned credentials and reports the correct SSID via API.
+
+**Automation:** `pytest test/wifi/test_connection.py::test_connect_to_test_ap -v`
+
+### WIFI-101: DHCP Address Assigned
+
+**Precondition:**
+- WiFi Tester AP running: `wt.ap_status()["active"] == True`
+- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
+- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Get DUT IP from AP status: `wt.ap_status()["stations"][0]["ip"]` | IP address returned |
+| 2 | Verify IP is in DHCP range | IP matches `192.168.4.x` (x > 1) |
+| 3 | Verify DUT self-reports same IP: `wt.http_get("http://<DUT_IP>/api/status")` → `wifi_ip` | Matches station IP |
+
+**Pass Criteria:** DUT receives a DHCP address in the 192.168.4.x range and self-reports the same IP.
+
+**Automation:** `pytest test/wifi/test_connection.py::test_dhcp_address -v`
+
+### WIFI-102: mDNS Resolves on Test Network
+
+**Precondition:**
+- WiFi Tester AP running: `wt.ap_status()["active"] == True`
+- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
+- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
+- DUT WiFi connected: relay `/api/status` → `wifi_connected` is `true` (mDNS starts after WiFi connect)
+- avahi-utils installed on Pi: `avahi-resolve-host-name --version` exits 0
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Resolve mDNS from Pi: `avahi-resolve-host-name -4 modbus-proxy.local` | Returns DUT IP (192.168.4.x) |
+| 2 | Verify resolved IP matches DUT station IP | IPs match |
+| 3 | Access DUT via mDNS hostname through relay: `wt.http_get("http://modbus-proxy.local/api/status")` | 200 OK, valid JSON |
+
+**Pass Criteria:** `modbus-proxy.local` resolves to the DUT's IP on the test AP network, and the DUT is reachable via the mDNS hostname.
+
+**Automation:** `pytest test/wifi/test_connection.py::test_mdns_resolve -v`
+
+### WIFI-103: Web Dashboard Accessible
+
+**Precondition:**
+- WiFi Tester AP running: `wt.ap_status()["active"] == True`
+- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
+- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Request dashboard: `wt.http_get("http://<DUT_IP>/")` | 200 OK |
+| 2 | Check Content-Type header | `text/html` |
+| 3 | Check body contains dashboard marker | HTML contains `<title>` and `Modbus Proxy` |
+
+**Pass Criteria:** DUT serves HTML dashboard page via the test AP relay.
+
+**Automation:** `pytest test/wifi/test_connection.py::test_web_dashboard -v`
+
+### WIFI-104: REST API Accessible
+
+**Precondition:**
+- WiFi Tester AP running: `wt.ap_status()["active"] == True`
+- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
+- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Request API status: `wt.http_get("http://<DUT_IP>/api/status")` | 200 OK |
+| 2 | Parse response as JSON | Valid JSON with `fw_version`, `uptime`, `free_heap` fields |
+| 3 | Verify `wifi_connected` | `true` |
+| 4 | Verify `wifi_ssid` | Matches test AP SSID |
+
+**Pass Criteria:** DUT REST API returns valid JSON with correct status fields via the test AP relay.
+
+**Automation:** `pytest test/wifi/test_connection.py::test_rest_api -v`
+
+### WIFI-105: Connect with WPA2
+
+**Precondition:**
+- WiFi Tester reachable: `wt.get_mode()` responds
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
+- DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
+- WiFi Tester AP stopped: `wt.ap_status()["active"] == False`
+- Generate random SSID and WPA2 password (8+ chars) for this test run
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Start WPA2 test AP: `wt.ap_start(SSID, PASS)` | AP active with WPA2 |
+| 2 | Trigger captive portal and provision DUT with WPA2 credentials | DUT accepts credentials (200 OK) |
+| 3 | Wait for DUT to connect: `wt.wait_for_station(timeout=30)` | DUT appears as station |
+| 4 | Verify via relay: `wt.http_get("http://<DUT_IP>/api/status")` → `wifi_ssid` | Matches SSID |
+| 5 | Verify `wifi_connected` | `true` |
+
+**Pass Criteria:** DUT authenticates with WPA2 and connects to the test AP.
+
+**Automation:** `pytest test/wifi/test_connection.py::test_wpa2_connect -v`
+
+### WIFI-106: Connect to Open Network
+
+**Precondition:**
+- WiFi Tester reachable: `wt.get_mode()` responds
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
+- DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
+- WiFi Tester AP stopped: `wt.ap_status()["active"] == False`
+- Generate random SSID (no password) for this test run
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Start open test AP: `wt.ap_start(SSID)` (no password) | AP active, open network |
+| 2 | Trigger captive portal and provision DUT with open SSID (empty password) | DUT accepts credentials (200 OK) |
+| 3 | Wait for DUT to connect: `wt.wait_for_station(timeout=30)` | DUT appears as station |
+| 4 | Verify via relay: `wt.http_get("http://<DUT_IP>/api/status")` → `wifi_ssid` | Matches SSID |
+| 5 | Verify `wifi_connected` | `true` |
+
+**Pass Criteria:** DUT connects to an open (no password) test AP.
+
+**Automation:** `pytest test/wifi/test_connection.py::test_open_network_connect -v`
+
+## 5. WiFi Reconnection Tests (WIFI-2xx)
+
+These tests verify the DUT handles WiFi AP outages gracefully — reconnecting automatically, preserving uptime, and not leaking memory.
+
+### WIFI-200: Reconnect After 5s AP Dropout
+
+**Precondition:**
+- WiFi Tester AP running: `wt.ap_status()["active"] == True`
+- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
+- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
+- Baseline uptime: record `/api/status` → `uptime` as `U_before` (via relay)
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Stop AP: `wt.ap_stop()` | AP stopped |
+| 2 | Wait 5 seconds | DUT loses WiFi |
+| 3 | Restart AP with same SSID/password: `wt.ap_start(SSID, PASS)` | AP active |
+| 4 | Wait for DUT to reconnect: `wt.wait_for_station(timeout=30)` | DUT appears as station |
+| 5 | Verify via relay: `wt.http_get("http://<DUT_IP>/api/status")` → `uptime` | `uptime` > `U_before` (no reboot) |
+
+**Pass Criteria:** DUT auto-reconnects within 30s after AP returns, without rebooting.
+
+**Automation:** `pytest test/wifi/test_reconnect.py::test_5s_dropout -v`
+
+### WIFI-201: Reconnect After DUT Reset, MQTT Recovers
+
+**Precondition:**
+- WiFi Tester AP running: `wt.ap_status()["active"] == True`
+- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
+- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
+- MQTT broker on Pi: `mosquitto_pub -h 192.168.4.1 -u admin -P admin -t test -m ok` succeeds
+- DUT MQTT connected: relay `/api/status` → `mqtt_connected` is `true`
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
+- Baseline uptime: record relay `/api/status` → `uptime` as `U_before`
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Reset DUT: `wt.serial_reset(SLOT)` | DUT reboots |
+| 2 | Wait for DUT: `wt.wait_for_station(timeout=30)` | DUT reconnects to test AP |
+| 3 | Check WiFi via relay: `/api/status` → `wifi_connected` | `true` |
+| 4 | Wait up to 10s, check MQTT via relay: `/api/status` → `mqtt_connected` | `true` (MQTT reconnected to Pi broker) |
+| 5 | Verify uptime reset via relay: `/api/status` → `uptime` | `uptime` < `U_before` (DUT rebooted) |
+
+**Pass Criteria:** DUT reconnects to test AP and re-establishes MQTT connection to Pi broker within 30s after reset.
+
+**Automation:** `pytest test/wifi/test_reconnect.py::test_reset_mqtt_recovery -v`
+
+### WIFI-202: Extended 90s Dropout
+
+**Precondition:**
+- WiFi Tester AP running: `wt.ap_status()["active"] == True`
+- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
+- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
+- Baseline uptime: record `/api/status` → `uptime` as `U_before` (via relay)
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Stop AP: `wt.ap_stop()` | AP stopped |
+| 2 | Wait 90 seconds | Extended outage |
+| 3 | Restart AP: `wt.ap_start(SSID, PASS)` | AP active |
+| 4 | Wait for DUT: `wt.wait_for_station(timeout=60)` | DUT reconnects |
+| 5 | Verify uptime via relay: `/api/status` → `uptime` | `uptime` > `U_before` (no reboot) |
+
+**Pass Criteria:** DUT recovers even after 90s outage without rebooting.
+
+**Automation:** `pytest test/wifi/test_reconnect.py::test_90s_dropout -v`
+
+### WIFI-203: AP SSID Changes
+
+**Precondition:**
+- WiFi Tester AP running: `wt.ap_status()["active"] == True`
+- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
+- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Stop AP: `wt.ap_stop()` | AP stopped |
+| 2 | Start AP with different SSID: `wt.ap_start("Wrong-SSID", PASS)` | AP active with wrong SSID |
+| 3 | Wait 15 seconds | DUT cannot find its SSID |
+| 4 | Check AP stations: `wt.ap_status()["stations"]` | Empty — DUT did not connect |
+| 5 | Monitor serial: `wt.serial_monitor(SLOT, timeout=5)` | DUT running (not crashed) |
+| 6 | Restore correct AP: `wt.ap_stop()` then `wt.ap_start(SSID, PASS)` | Correct AP back |
+| 7 | Wait for DUT: `wt.wait_for_station(timeout=30)` | DUT reconnects |
+
+**Pass Criteria:** DUT does not connect to wrong SSID and reconnects when correct SSID returns.
+
+**Automation:** `pytest test/wifi/test_reconnect.py::test_ssid_change -v`
+
+### WIFI-204: AP Password Changes
+
+**Precondition:**
+- WiFi Tester AP running: `wt.ap_status()["active"] == True`
+- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
+- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Stop AP: `wt.ap_stop()` | AP stopped |
+| 2 | Start AP with same SSID, different password: `wt.ap_start(SSID, "wrongpass99")` | AP active |
+| 3 | Wait 15 seconds | DUT finds SSID but auth fails |
+| 4 | Check AP stations: `wt.ap_status()["stations"]` | Empty — DUT auth rejected |
+| 5 | Monitor serial: `wt.serial_monitor(SLOT, timeout=5)` | DUT running (not crashed) |
+| 6 | Restore correct password: `wt.ap_stop()` then `wt.ap_start(SSID, PASS)` | Correct AP back |
+| 7 | Wait for DUT: `wt.wait_for_station(timeout=30)` | DUT reconnects |
+
+**Pass Criteria:** DUT cannot connect with old password and reconnects when correct password is restored.
+
+**Automation:** `pytest test/wifi/test_reconnect.py::test_password_change -v`
+
+### WIFI-205: 5 Reset Cycles, Heap Stable
+
+**Precondition:**
+- WiFi Tester AP running: `wt.ap_status()["active"] == True`
+- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
+- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
+- MQTT broker on Pi: `mosquitto_pub -h 192.168.4.1 -u admin -P admin -t test -m ok` succeeds
+- DUT MQTT connected: relay `/api/status` → `mqtt_connected` is `true`
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
+- Baseline heap: record relay `/api/status` → `free_heap` as `H_before`
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Repeat 5 times: `wt.serial_reset(SLOT)`, `wt.wait_for_station(timeout=30)`, verify relay `/api/status` → `mqtt_connected` is `true` | DUT reconnects WiFi + MQTT each cycle |
+| 2 | After cycle 5: relay `/api/status` → `free_heap` as `H_after` | Value returned |
+| 3 | Compare heap: `H_after` >= `H_before - 1000` | No significant heap loss |
+
+**Pass Criteria:** DUT reconnects WiFi and MQTT 5 times with free heap remaining within 1000 bytes of baseline (no memory leak).
+
+**Automation:** `pytest test/wifi/test_reconnect.py::test_heap_stability -v`
+
+## 6. WiFi Invalid Credentials (WIFI-3xx)
+
+These tests verify the DUT handles wrong or missing WiFi credentials gracefully without crashing, and recovers when correct credentials are provided.
+
+### WIFI-300: Wrong Password
+
+**Precondition:**
+- WiFi Tester reachable: `wt.get_mode()` responds
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
+- WiFi Tester AP running with known credentials: `wt.ap_status()["active"] == True`
+- DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Trigger captive portal and provision DUT with correct SSID but wrong password | 200 OK — credentials accepted by portal |
+| 2 | Wait 15 seconds | DUT attempts to connect with wrong password |
+| 3 | Check AP stations: `wt.ap_status()["stations"]` | Empty — DUT auth rejected |
+| 4 | Monitor serial: `wt.serial_monitor(SLOT, timeout=5)` | DUT running, no crash, shows WiFi connection failure |
+
+**Pass Criteria:** DUT fails gracefully with wrong password — no crash, no reboot loop.
+
+**Automation:** `pytest test/wifi/test_credentials.py::test_wrong_password -v`
+
+### WIFI-301: Wrong SSID
+
+**Precondition:**
+- WiFi Tester reachable: `wt.get_mode()` responds
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
+- WiFi Tester AP running: `wt.ap_status()["active"] == True`
+- DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Trigger captive portal and provision DUT with non-existent SSID and any password | 200 OK — credentials accepted by portal |
+| 2 | Wait 15 seconds | DUT searches for non-existent SSID |
+| 3 | Check AP stations: `wt.ap_status()["stations"]` | Empty — DUT not connected |
+| 4 | Monitor serial: `wt.serial_monitor(SLOT, timeout=5)` | DUT running, no crash |
+
+**Pass Criteria:** DUT fails gracefully when SSID doesn't exist — no crash, no reboot loop.
+
+**Automation:** `pytest test/wifi/test_credentials.py::test_wrong_ssid -v`
+
+### WIFI-302: Empty Password for WPA2 AP
+
+**Precondition:**
+- WiFi Tester reachable: `wt.get_mode()` responds
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
+- WiFi Tester AP running with WPA2 (password set): `wt.ap_status()["active"] == True`
+- DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Trigger captive portal and provision DUT with correct SSID but empty password | 200 OK — credentials accepted by portal |
+| 2 | Wait 15 seconds | DUT attempts to connect with empty password |
+| 3 | Check AP stations: `wt.ap_status()["stations"]` | Empty — auth fails |
+| 4 | Monitor serial: `wt.serial_monitor(SLOT, timeout=5)` | DUT running, no crash |
+
+**Pass Criteria:** DUT handles empty password for WPA2 AP without crashing.
+
+**Automation:** `pytest test/wifi/test_credentials.py::test_empty_password -v`
+
+### WIFI-303: Correct Credentials After Bad
+
+**Precondition:**
+- WiFi Tester reachable: `wt.get_mode()` responds
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
+- WiFi Tester AP running: `wt.ap_status()["active"] == True`
+- DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Trigger captive portal and provision DUT with wrong password | 200 OK |
+| 2 | Wait 15 seconds | DUT fails to connect |
+| 3 | Trigger captive portal again (3 rapid resets or GPIO) | Portal mode active |
+| 4 | Provision DUT with correct SSID and password | 200 OK |
+| 5 | Wait for DUT to connect: `wt.wait_for_station(timeout=30)` | DUT connects |
+| 6 | Verify via relay: `wt.http_get("http://<DUT_IP>/api/status")` → `wifi_connected` | `true` |
+
+**Pass Criteria:** DUT recovers and connects after receiving correct credentials following a failed attempt.
+
+**Automation:** `pytest test/wifi/test_credentials.py::test_correct_after_bad -v`
+
+## 7. Captive Portal Tests (WIFI-4xx, CP-1xx)
+
+These tests verify the captive portal UI, WiFi scanning, provisioning flow, DNS redirect, timeout behavior, and that portal mode is not entered accidentally.
+
+### WIFI-401: Portal Page Accessible
+
+**Precondition:**
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
+- DUT in captive portal mode: trigger via `wt.gpio_set(17, 0)` + `wt.serial_reset(SLOT)`, verify serial contains `CAPTIVE PORTAL MODE TRIGGERED`, then `wt.gpio_set(17, "z")`
+- WiFi Tester joined portal AP: `wt.sta_join("MODBUS-Proxy-Setup", "modbus-setup")` succeeds
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Request portal page: `wt.http_get("http://192.168.4.1/")` | 200 OK |
+| 2 | Check Content-Type | `text/html` |
+| 3 | Check body contains portal UI elements | HTML contains WiFi setup form |
+
+**Pass Criteria:** Portal HTML page is served on 192.168.4.1 with WiFi configuration form.
+
+**Automation:** `pytest test/wifi/test_portal.py::test_portal_page -v`
+
+### WIFI-402: WiFi Scan Endpoint in Portal
+
+**Precondition:**
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
+- DUT in captive portal mode: trigger via GPIO, verify serial output
+- WiFi Tester joined portal AP: `wt.sta_join("MODBUS-Proxy-Setup", "modbus-setup")` succeeds
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Request scan: `wt.http_get("http://192.168.4.1/api/scan")` | 200 OK |
+| 2 | Parse response as JSON | Valid JSON array |
+| 3 | Check array contains at least one network | Each entry has `ssid` and `rssi` fields |
+
+**Pass Criteria:** `/api/scan` returns a JSON list of nearby WiFi networks with SSID and RSSI.
+
+**Automation:** `pytest test/wifi/test_portal.py::test_wifi_scan -v`
+
+### WIFI-403: Full Provisioning Flow
+
+**Precondition:**
+- WiFi Tester reachable: `wt.get_mode()` responds
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
+- DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
+- WiFi Tester AP stopped: `wt.ap_status()["active"] == False`
+- Generate random SSID and password for this test run
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Trigger captive portal via GPIO | Serial confirms `CAPTIVE PORTAL MODE TRIGGERED` |
+| 2 | Join portal AP: `wt.sta_join("MODBUS-Proxy-Setup", "modbus-setup")` | Connected |
+| 3 | Scan networks: `wt.http_get("http://192.168.4.1/api/scan")` | 200 OK, JSON array |
+| 4 | Submit credentials: `wt.http_post("http://192.168.4.1/api/wifi", json_data={"ssid": SSID, "password": PASS})` | 200 OK |
+| 5 | Leave portal: `wt.sta_leave()` | AP auto-restores |
+| 6 | Start test AP: `wt.ap_start(SSID, PASS)` | AP active |
+| 7 | Wait for DUT: `wt.wait_for_station(timeout=30)` | DUT connects to test AP |
+| 8 | Verify via relay: `/api/status` → `wifi_ssid` | Matches random SSID |
+
+**Pass Criteria:** Complete portal flow — scan, submit credentials, DUT connects to provisioned AP.
+
+**Automation:** `pytest test/wifi/test_portal.py::test_full_provisioning -v`
+
+### WIFI-404: Portal DNS Redirect
+
+**Precondition:**
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
+- DUT in captive portal mode: trigger via GPIO, verify serial output
+- WiFi Tester joined portal AP: `wt.sta_join("MODBUS-Proxy-Setup", "modbus-setup")` succeeds
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Request Android captive portal URL: `wt.http_get("http://192.168.4.1/generate_204")` | Redirect (302) or portal page (200) |
+| 2 | Request Apple captive portal URL: `wt.http_get("http://192.168.4.1/hotspot-detect.html")` | Redirect or portal page |
+| 3 | Request Windows captive portal URL: `wt.http_get("http://192.168.4.1/connecttest.txt")` | Redirect or portal page |
+
+**Pass Criteria:** All standard captive portal detection URLs return a redirect or the portal page, triggering OS captive portal UI.
+
+**Automation:** `pytest test/wifi/test_portal.py::test_dns_redirect -v`
+
+### WIFI-405: Portal Timeout (5 min)
+
+**Precondition:**
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
+- DUT in captive portal mode: trigger via GPIO, verify serial output
+- Record start time
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Monitor serial for timeout message: `wt.serial_monitor(SLOT, pattern="Captive portal timeout", timeout=330)` | Pattern matched within ~5 min (300s + margin) |
+| 2 | Monitor serial for reboot: `wt.serial_monitor(SLOT, pattern="SPI_FAST_FLASH_BOOT", timeout=15)` | DUT reboots after timeout |
+
+**Pass Criteria:** Portal auto-exits and DUT reboots after 5 minutes (300s) of inactivity.
+
+**Automation:** `pytest test/wifi/test_portal.py::test_portal_timeout -v`
+
+**Duration:** ~5.5 minutes
+
+### WIFI-406: Normal Boot No Portal
+
+**Precondition:**
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
+- GPIO 17 in input with pull-up state: `wt.gpio_set(17, "z")`
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Reset DUT: `wt.serial_reset(SLOT)` | DUT reboots |
+| 2 | Check serial output does NOT contain portal trigger | No `CAPTIVE PORTAL MODE TRIGGERED` in output |
+| 3 | Monitor serial for normal boot: `wt.serial_monitor(SLOT, pattern="WiFi connected", timeout=30)` | DUT connects to WiFi normally |
+
+**Pass Criteria:** DUT boots normally without entering portal mode when GPIO 2 is not held low.
+
+**Automation:** `pytest test/wifi/test_portal.py::test_normal_boot_no_portal -v`
+
+### CP-101: Captive Portal WiFi Configuration
+
+**Precondition:**
+- DUT in captive portal mode (triggered via GPIO): `wt.gpio_set(17, 0)` + `wt.serial_reset(SLOT)` + `wt.gpio_set(17, "z")`
+- Portal AP visible: `wt.scan()` shows `MODBUS-Proxy-Setup` SSID
+- Portal AP joinable: `wt.sta_join("MODBUS-Proxy-Setup", "modbus-setup")` succeeds
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | In portal mode | Connected to "MODBUS-Proxy-Setup" AP |
+| 2 | Scan for networks | GET /api/scan returns nearby networks |
+| 3 | Select network, enter password | Fill form |
+| 4 | Click Save | POST /api/wifi saves credentials |
+| 5 | Device restarts | Connects to configured network |
+
+**Pass Criteria**: WiFi credentials saved via portal, device connects on restart.
+
+**Automation:** pytest, WiFi Tester (HTTP relay). In portal mode: GET /api/scan, POST /api/wifi with test AP credentials via relay, verify DUT joins new AP.
+
+### CP-102: Captive Portal Timeout
+
+**Precondition:**
+- DUT in captive portal mode (triggered via GPIO): `wt.gpio_set(17, 0)` + `wt.serial_reset(SLOT)` + `wt.gpio_set(17, "z")`
+- Portal AP visible: `wt.scan()` shows `MODBUS-Proxy-Setup` SSID
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Trigger captive portal mode | AP active |
+| 2 | Do nothing for 5 minutes | Timeout reached |
+| 3 | Device restarts | Attempts normal WiFi connection |
+
+**Pass Criteria**: Portal doesn't run indefinitely; 5-minute timeout triggers restart.
+
+**Automation:** pytest, WiFi Tester (GPIO + serial reset). Trigger portal via `wt.gpio_set(17, 0)` + `wt.serial_reset(SLOT)`, release GPIO, wait 5+ minutes, verify DUT restarts (AP disappears, STA reconnects).
+
+## 8. WiFi Credential Management (WIFI-5xx)
+
+These tests verify that WiFi credentials are stored in NVS, take priority over compiled fallbacks, can be updated via API, and handle edge cases like long SSIDs and special characters.
+
+### WIFI-500: NVS Credentials Persist
+
+**Precondition:**
+- WiFi Tester AP running: `wt.ap_status()["active"] == True`
+- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
+- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
+- DUT MQTT connected: relay `/api/status` → `mqtt_connected` is `true`
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Record current SSID via relay: `/api/status` → `wifi_ssid` | Test AP SSID |
+| 2 | Reset DUT: `wt.serial_reset(SLOT)` | DUT reboots |
+| 3 | Wait for DUT: `wt.wait_for_station(timeout=30)` | DUT reconnects to test AP |
+| 4 | Verify SSID unchanged via relay: `/api/status` → `wifi_ssid` | Same test AP SSID |
+| 5 | Verify MQTT reconnected via relay: `/api/status` → `mqtt_connected` | `true` |
+
+**Pass Criteria:** DUT reconnects to test AP and MQTT broker after reboot using NVS-stored credentials.
+
+**Automation:** `pytest test/wifi/test_credentials.py::test_nvs_persist -v`
+
+### WIFI-501: NVS Credentials Survive MQTT Reconnect
+
+**Precondition:**
+- WiFi Tester AP running: `wt.ap_status()["active"] == True`
+- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
+- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
+- DUT MQTT connected: relay `/api/status` → `mqtt_connected` is `true`
+- Baseline: record relay `/api/status` → `wifi_ssid` as `SSID_before`
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Restart MQTT broker on Pi: `ssh pi@192.168.0.87 sudo systemctl restart mosquitto` | Broker restarts |
+| 2 | Wait 10s for DUT to detect disconnect and reconnect | MQTT reconnect cycle |
+| 3 | Verify WiFi stable via relay: `/api/status` → `wifi_connected` | `true` (WiFi never dropped) |
+| 4 | Verify MQTT reconnected via relay: `/api/status` → `mqtt_connected` | `true` |
+| 5 | Verify SSID unchanged via relay: `/api/status` → `wifi_ssid` | Matches `SSID_before` |
+
+**Pass Criteria:** WiFi credentials in NVS remain intact after MQTT broker restart; DUT stays on same SSID and re-establishes MQTT.
+
+**Automation:** `pytest test/wifi/test_credentials.py::test_nvs_mqtt_reconnect -v`
+
+### WIFI-502: POST /api/wifi Saves and Reboots
+
+**Precondition:**
+- WiFi Tester AP running: `wt.ap_status()["active"] == True`
+- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
+- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
+- DUT MQTT connected: relay `/api/status` → `mqtt_connected` is `true`
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
+- Generate a second random SSID and password
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | POST new credentials via relay: `wt.http_post("http://<DUT_IP>/api/wifi", json_data={"ssid": SSID2, "password": PASS2})` | 200 OK |
+| 2 | Monitor serial for reboot: `wt.serial_monitor(SLOT, pattern="SPI_FAST_FLASH_BOOT", timeout=15)` | DUT reboots |
+| 3 | Stop old AP, start new AP: `wt.ap_stop()` then `wt.ap_start(SSID2, PASS2)` | New AP active |
+| 4 | Wait for DUT: `wt.wait_for_station(timeout=30)` | DUT connects to new AP |
+| 5 | Verify SSID via relay: `/api/status` → `wifi_ssid` | Matches SSID2 |
+
+**Pass Criteria:** `/api/wifi` POST saves new credentials to NVS, DUT reboots and connects to the new AP.
+
+**Automation:** `pytest test/wifi/test_credentials.py::test_api_wifi_save -v`
+
+### WIFI-503: Factory Reset Clears WiFi
+
+**Precondition:**
+- WiFi Tester AP running: `wt.ap_status()["active"] == True`
+- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
+- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Erase NVS via esptool | "Erase completed successfully" |
+| 2 | Monitor serial for reboot: `wt.serial_monitor(SLOT, pattern="SPI_FAST_FLASH_BOOT", timeout=15)` | DUT reboots |
+| 3 | Wait 15 seconds | DUT tries to connect to fallback WiFi |
+| 4 | Check AP stations: `wt.ap_status()["stations"]` | Empty — DUT did not connect to test AP |
+| 5 | Monitor serial: `wt.serial_monitor(SLOT, pattern="private-2G", timeout=15)` | DUT attempts fallback SSID |
+
+**Pass Criteria:** After NVS erase, DUT no longer connects to test AP and falls back to compiled credentials.
+
+**Automation:** `pytest test/wifi/test_credentials.py::test_factory_reset -v`
+
+### WIFI-504: Long SSID (32 chars)
+
+**Precondition:**
+- WiFi Tester reachable: `wt.get_mode()` responds
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
+- DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
+- Generate 32-character random SSID and password
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Start AP with 32-char SSID: `wt.ap_start(SSID_32, PASS)` | AP active |
+| 2 | Trigger captive portal and provision DUT with 32-char SSID | 200 OK |
+| 3 | Wait for DUT: `wt.wait_for_station(timeout=30)` | DUT connects |
+| 4 | Verify via relay: `/api/status` → `wifi_ssid` | Full 32-char SSID matches |
+
+**Pass Criteria:** DUT handles maximum-length (32 char) SSID without truncation.
+
+**Automation:** `pytest test/wifi/test_credentials.py::test_long_ssid -v`
+
+### WIFI-505: Special Characters in Password
+
+**Precondition:**
+- WiFi Tester reachable: `wt.get_mode()` responds
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
+- DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
+- Generate random SSID and password containing `!@#$%^&*()` characters
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Start AP with special-char password: `wt.ap_start(SSID, SPECIAL_PASS)` | AP active |
+| 2 | Trigger captive portal and provision DUT with special-char password | 200 OK |
+| 3 | Wait for DUT: `wt.wait_for_station(timeout=30)` | DUT connects |
+| 4 | Verify via relay: `/api/status` → `wifi_connected` | `true` |
+
+**Pass Criteria:** DUT handles special characters in WiFi password correctly.
+
+**Automation:** `pytest test/wifi/test_credentials.py::test_special_chars_password -v`
+
+## 9. MQTT & Modbus Tests (TC-1xx)
+
+### TC-100: Basic Startup
 
 **Precondition:**
 - TC-000 passed (firmware flashed, NVS erased)
@@ -346,7 +991,7 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Automation:** pytest, requests, paho-mqtt. Verify /api/status uptime > 0, subscribe to MBUS-PROXY/health.
 
-### 3.2 TC-101: Wallbox Power via MQTT (Plain Float)
+### TC-101: Wallbox Power via MQTT (Plain Float)
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -364,7 +1009,7 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Automation:** pytest, paho-mqtt. Publish float to wallbox topic, subscribe to MBUS-PROXY/power, verify wallbox field.
 
-### 3.3 TC-102: Wallbox Power via MQTT (JSON power key)
+### TC-102: Wallbox Power via MQTT (JSON power key)
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -379,7 +1024,7 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Automation:** pytest, paho-mqtt. Publish {"power":5000}, verify via MBUS-PROXY/power or /api/status.
 
-### 3.4 TC-103: Wallbox Power via MQTT (JSON chargePower key)
+### TC-103: Wallbox Power via MQTT (JSON chargePower key)
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -394,7 +1039,7 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Automation:** pytest, paho-mqtt. Publish {"chargePower":7400}, verify via /api/status wallbox_power.
 
-### 3.5 TC-104: Config Command - get_config
+### TC-104: Config Command - get_config
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -410,7 +1055,7 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Automation:** pytest, paho-mqtt. Publish get_config, subscribe to response topic, validate JSON fields.
 
-### 3.6 TC-105: Config Command - set_wallbox_topic
+### TC-105: Config Command - set_wallbox_topic
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -428,7 +1073,7 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Automation:** pytest, paho-mqtt. Publish set_wallbox_topic, publish power to new topic, verify update.
 
-### 3.7 TC-106: Config Command - set_log_level
+### TC-106: Config Command - set_log_level
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -445,7 +1090,7 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Automation:** pytest, paho-mqtt. Publish set_log_level, subscribe to MBUS-PROXY/log, verify filtering.
 
-### 3.8 TC-107: Config Command - set_mqtt
+### TC-107: Config Command - set_mqtt
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -463,7 +1108,7 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Automation:** pytest, paho-mqtt, requests. Publish set_mqtt, verify reconnect via /api/status mqtt_reconnects.
 
-### 3.9 TC-108: Config Command - factory_reset
+### TC-108: Config Command - factory_reset
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -481,7 +1126,7 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Automation:** pytest, paho-mqtt, requests. Set non-default config, publish factory_reset, verify defaults via get_config.
 
-### 3.10 TC-109: Power Correction Threshold
+### TC-109: Power Correction Threshold
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -499,7 +1144,7 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Automation:** pytest, paho-mqtt. Publish below/above threshold values, check MBUS-PROXY/power active flag.
 
-### 3.11 TC-110: Wallbox Data Staleness
+### TC-110: Wallbox Data Staleness
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -516,50 +1161,125 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Automation:** pytest, paho-mqtt. Publish wallbox power, sleep 35s, verify correction deactivates via /api/status.
 
-## 4. Edge Case Tests
+## 10. REST API via WiFi (WIFI-6xx)
 
-### 4.1 EC-100: MQTT Disconnect During Operation
+These tests verify that all DUT network services (REST API, OTA, RSSI reporting) work correctly on the isolated test AP network.
+
+### WIFI-600: Full REST API via Relay
+
+**Precondition:**
+- WiFi Tester AP running: `wt.ap_status()["active"] == True`
+- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
+- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | GET `/api/status` via relay | 200 OK, valid JSON |
+| 2 | GET `/api/config` via relay | 200 OK, valid JSON with `wallbox_topic`, `mqtt_host` |
+| 3 | GET `/` via relay (dashboard) | 200 OK, HTML content |
+| 4 | GET `/status` via relay (status page) | 200 OK, HTML content |
+| 5 | GET `/setup` via relay (setup page) | 200 OK, HTML content |
+
+**Pass Criteria:** All key DUT endpoints respond correctly through the WiFi Tester relay on the isolated network.
+
+**Automation:** `pytest test/wifi/test_services.py::test_full_api -v`
+
+### WIFI-601: OTA Health Check
+
+**Precondition:**
+- WiFi Tester AP running: `wt.ap_status()["active"] == True`
+- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
+- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | GET `/ota/health` via relay: `wt.http_get("http://<DUT_IP>/ota/health")` | 200 OK |
+| 2 | Parse response | JSON with `status: "ok"` |
+
+**Pass Criteria:** OTA health endpoint responds on the test AP network.
+
+**Automation:** `pytest test/wifi/test_services.py::test_ota_health -v`
+
+### WIFI-602: RSSI Reported Correctly
+
+**Precondition:**
+- WiFi Tester AP running: `wt.ap_status()["active"] == True`
+- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
+- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | GET `/api/status` via relay | 200 OK |
+| 2 | Check `wifi_rssi` field | Integer value between -100 and -1 (dBm) |
+
+**Pass Criteria:** DUT reports a plausible negative RSSI value (between -100 and -1 dBm).
+
+**Automation:** `pytest test/wifi/test_services.py::test_rssi -v`
+
+### WIFI-603: wifi_ssid Matches Test AP
+
+**Precondition:**
+- WiFi Tester AP running: `wt.ap_status()["active"] == True` — record SSID
+- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
+- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | GET `/api/status` via relay | 200 OK |
+| 2 | Check `wifi_ssid` field | Matches WiFi Tester AP SSID exactly |
+
+**Pass Criteria:** DUT reports the correct test AP SSID via its status API.
+
+**Automation:** `pytest test/wifi/test_services.py::test_ssid_match -v`
+
+## 11. Edge Case Tests (EC-1xx)
+
+### EC-100: MQTT Disconnect During Operation
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
 - MQTT connected: `/api/status` → `mqtt_connected: true`
-- MQTT broker accessible via SSH: `ssh broker-host "systemctl is-active mosquitto"` → `active`
+- Wallbox power active: publish `3500` to `wallbox`, verify `/api/status` → `wallbox_power` ≈ 3500
+- MQTT broker accessible via SSH: `ssh pi@192.168.0.87 "systemctl is-active mosquitto"` → `active`
+- Baseline uptime: record `/api/status` → `uptime` as `U_before`
+- Subscribe to `MBUS-PROXY/log` for buffered log capture
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | System running, wallbox power active | Normal operation |
-| 2 | Stop MQTT broker | Connection lost |
-| 3 | Check serial log | "MQTT reconnecting..." messages |
-| 4 | Modbus proxy continues | SUN2000 ↔ DTSU still working |
-| 5 | Log messages buffered | Up to 16 entries queued |
-| 6 | Restart MQTT broker | Auto-reconnect |
-| 7 | Buffered logs published | Logs appear on MBUS-PROXY/log |
+| 1 | Stop MQTT broker: `ssh pi@192.168.0.87 sudo systemctl stop mosquitto` | Broker stops |
+| 2 | Wait 10s | DUT detects disconnect |
+| 3 | Restart MQTT broker: `ssh pi@192.168.0.87 sudo systemctl start mosquitto` | Broker available |
+| 4 | Wait for MQTT reconnect: poll `/api/status` → `mqtt_connected` | `true` within 30s |
+| 5 | Check uptime via `/api/status` → `uptime` | `uptime` > `U_before` (no reboot) |
+| 6 | Check `MBUS-PROXY/log` subscription | Buffered log messages arrive after reconnect |
 
-**Pass Criteria**: Modbus unaffected, logs buffered and recovered.
+**Pass Criteria**: DUT reconnects to MQTT within 30s, no reboot, buffered logs published after reconnect.
 
-**Automation:** pytest, paho-mqtt, subprocess (SSH). Stop/start mosquitto on broker via `ssh`, verify log buffer recovery on reconnect.
+**Automation:** pytest, paho-mqtt, subprocess (SSH). Stop/start mosquitto on Pi via `ssh`, verify `mqtt_connected` recovery and log buffer flush via MQTT subscriber.
 
-### 4.2 EC-101: WiFi Disconnect During Operation
+### EC-101: WiFi Disconnect During Operation
 
 **Precondition:**
 - WiFi Tester AP running: `wt.ap_status()["active"] == True`
 - DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
 - DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200 OK
+- MQTT connected: relay `/api/status` → `mqtt_connected: true`
+- Baseline uptime: record relay `/api/status` → `uptime` as `U_before`
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | System running normally | WiFi + MQTT connected |
-| 2 | Disable WiFi AP | WiFi connection lost |
-| 3 | Modbus proxy continues | SUN2000 ↔ DTSU still working |
-| 4 | Wallbox data goes stale | Correction deactivates after 30s |
-| 5 | Re-enable WiFi AP | WiFi reconnects |
-| 6 | MQTT reconnects | Subscriptions restored |
+| 1 | Stop WiFi AP: `wt.ap_stop()` | AP stopped, DUT loses WiFi |
+| 2 | Wait 35s (beyond 30s staleness timeout) | Wallbox data goes stale on DUT |
+| 3 | Restart WiFi AP: `wt.ap_start(SSID, PASS)` | AP active |
+| 4 | Wait for DUT reconnect: `wt.wait_for_station(timeout=60)` | DUT reconnects |
+| 5 | Verify via relay: `/api/status` → `mqtt_connected` | `true` (MQTT re-established) |
+| 6 | Verify uptime via relay: `/api/status` → `uptime` | `uptime` > `U_before` (no reboot) |
 
-**Pass Criteria**: Modbus unaffected, graceful WiFi recovery.
+**Pass Criteria**: DUT reconnects WiFi and MQTT after AP dropout, no reboot, uptime preserved.
 
-**Automation:** pytest, WiFi Tester (ap_stop/ap_start). Drop AP, wait for staleness timeout, restore, verify recovery via HTTP relay.
+**Automation:** pytest, WiFi Tester (ap_stop/ap_start). Drop AP for 35s (staleness timeout + margin), restore, verify WiFi + MQTT recovery via relay.
 
-### 4.3 EC-102: Malformed Wallbox Power Message
+### EC-102: Malformed Wallbox Power Message
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -578,7 +1298,7 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Automation:** pytest, paho-mqtt, requests. Publish "not_a_number", verify wallbox_errors incremented via /api/status.
 
-### 4.4 EC-103: Malformed Config Command
+### EC-103: Malformed Config Command
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -597,7 +1317,7 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Automation:** pytest, paho-mqtt. Publish invalid JSON, missing cmd, unknown cmd — check error responses on response topic.
 
-### 4.5 EC-104: Oversized MQTT Message
+### EC-104: Oversized MQTT Message
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -616,7 +1336,7 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Automation:** pytest, paho-mqtt, requests. Publish 300-byte and 600-byte messages, verify device alive via /api/status.
 
-### 4.6 EC-105: Rapid Wallbox Power Updates
+### EC-105: Rapid Wallbox Power Updates
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -634,7 +1354,7 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Automation:** pytest, paho-mqtt, requests. Burst 20 messages in 2s, verify last value and heap stability via /api/status.
 
-### 4.7 EC-106: Power Cycle Recovery
+### EC-106: Power Cycle Recovery
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -653,7 +1373,7 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Automation:** pytest, pyserial (RFC2217). Set custom config via MQTT, toggle DTR on rfc2217://192.168.0.87:4003 to reset, verify NVS preserved via get_config.
 
-### 4.8 EC-107: OTA Update
+### EC-107: OTA Update
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -672,7 +1392,7 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Automation:** pytest, requests. POST firmware.bin to /ota with auth header, verify new fw_version via /api/status.
 
-### 4.9 EC-108: Concurrent MQTT Publish and Subscribe
+### EC-108: Concurrent MQTT Publish and Subscribe
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -690,7 +1410,7 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Automation:** pytest, paho-mqtt (threaded). Concurrent publish/subscribe threads, verify all messages processed without timeouts.
 
-### 4.10 EC-109: MQTT Reconnect with Config Change
+### EC-109: MQTT Reconnect with Config Change
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -709,7 +1429,7 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Automation:** pytest, paho-mqtt, requests. Send set_mqtt with invalid host, verify via /api/status, send valid host, verify recovery.
 
-### 4.11 EC-110: Log Buffer Overflow
+### EC-110: Log Buffer Overflow
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -728,7 +1448,7 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Automation:** pytest, paho-mqtt, subprocess (SSH). Stop broker, trigger >16 log events, restart broker, verify most recent 16 logs published.
 
-### 4.12 EC-111: Empty Wallbox Topic Message
+### EC-111: Empty Wallbox Topic Message
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -746,7 +1466,7 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Automation:** pytest, paho-mqtt, requests. Publish empty message, verify wallbox_errors incremented via /api/status.
 
-### 4.13 EC-112: Special Characters in Config
+### EC-112: Special Characters in Config
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -764,9 +1484,9 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Automation:** pytest, paho-mqtt. Set topic with "/" chars via set_wallbox_topic, publish to new topic, verify received.
 
-### 4.14 EC-113: Software Watchdog - Task Timeout Detection (Code Review)
+### EC-113: Software Watchdog - Task Timeout Detection (Code Review)
 
-These fault conditions cannot be triggered via external interfaces on production firmware. They are verified by code review and indirectly validated by runtime watchdog tests (EC-116, LD-005).
+These fault conditions cannot be triggered via external interfaces on production firmware. They are verified by code review and indirectly validated by runtime watchdog tests (EC-116, LD-001).
 
 **Verification method:** Code review of `src/modbus_proxy.cpp` watchdog task.
 
@@ -779,7 +1499,7 @@ These fault conditions cannot be triggered via external interfaces on production
 
 **Pass Criteria**: Code review confirms watchdog detects hung tasks within 65s and triggers ESP.restart().
 
-### 4.15 EC-114: Hardware Watchdog - Watchdog Task Recovery (Code Review)
+### EC-114: Hardware Watchdog - Watchdog Task Recovery (Code Review)
 
 **Verification method:** Code review of hardware WDT initialization in `setup()`.
 
@@ -791,7 +1511,7 @@ These fault conditions cannot be triggered via external interfaces on production
 
 **Pass Criteria**: Code review confirms hardware WDT is initialized as safety net behind software watchdog.
 
-### 4.16 EC-115: Critical Memory Watchdog (Code Review)
+### EC-115: Critical Memory Watchdog (Code Review)
 
 **Verification method:** Code review of heap monitoring in watchdog task.
 
@@ -804,7 +1524,7 @@ These fault conditions cannot be triggered via external interfaces on production
 
 **Pass Criteria**: Code review confirms heap monitoring detects critical memory and triggers preventive reboot.
 
-### 4.17 EC-116: Watchdog Survives MQTT Disconnect
+### EC-116: Watchdog Survives MQTT Disconnect
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -826,9 +1546,23 @@ These fault conditions cannot be triggered via external interfaces on production
 
 **Automation:** pytest, paho-mqtt, subprocess (SSH), requests. Stop broker 5 min, verify no reboot (uptime increases) via /api/status, restart broker.
 
-## 5. Web UI & Captive Portal Tests
+### Edge Case Coverage Checklist
 
-### 5.1 WEB-100: Dashboard Page Loads
+| Category | Covered By | Description |
+|----------|-----------|-------------|
+| Malformed input | EC-102, EC-103 | Invalid wallbox power, malformed JSON config |
+| Oversized input | EC-104 | MQTT message exceeding 256-byte limit |
+| Empty input | EC-111 | Empty wallbox topic message |
+| Concurrent operations | EC-108 | Simultaneous MQTT publish and subscribe |
+| Disconnect/reconnect | EC-100, EC-101, EC-109 | MQTT broker stop, WiFi AP dropout, config during reconnect |
+| Rapid-fire | EC-105 | 10 wallbox messages in 1 second |
+| Special characters | EC-112 | `<>&"'` in config values |
+| Timeout / staleness | TC-110 (§9) | Wallbox data staleness after 30s inactivity |
+| Resource exhaustion | EC-110, EC-115 | Log buffer overflow, critical memory watchdog (code review) |
+
+## 12. Web UI Tests (WEB-1xx)
+
+### WEB-100: Dashboard Page Loads
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -846,7 +1580,7 @@ These fault conditions cannot be triggered via external interfaces on production
 
 **Automation:** pytest, requests. GET /, verify 200 OK, check HTML for nav bar, status dots, power grid elements.
 
-### 5.2 WEB-101: Dashboard Power Color Coding
+### WEB-101: Dashboard Power Color Coding
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -864,7 +1598,7 @@ These fault conditions cannot be triggered via external interfaces on production
 
 **Automation:** pytest, requests, paho-mqtt. GET /, parse HTML/JS for color threshold logic. Publish power values, verify correction_active via /api/status.
 
-### 5.3 WEB-102: Status Page System Info
+### WEB-102: Status Page System Info
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -882,7 +1616,7 @@ These fault conditions cannot be triggered via external interfaces on production
 
 **Automation:** pytest, requests. GET /status, verify HTML contains System, WiFi, MQTT, MODBUS sections.
 
-### 5.4 WEB-103: Setup Page - Debug Toggle
+### WEB-103: Setup Page - Debug Toggle
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -900,7 +1634,7 @@ These fault conditions cannot be triggered via external interfaces on production
 
 **Automation:** pytest, requests. POST /api/debug, verify via GET /api/status debug_mode field, toggle back.
 
-### 5.5 WEB-104: Setup Page - MQTT Configuration
+### WEB-104: Setup Page - MQTT Configuration
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -920,7 +1654,7 @@ These fault conditions cannot be triggered via external interfaces on production
 
 **Automation:** pytest, requests, paho-mqtt. POST /api/config MQTT settings, verify response, check MQTT reconnect.
 
-### 5.6 WEB-105: Setup Page - Wallbox Topic
+### WEB-105: Setup Page - Wallbox Topic
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -937,7 +1671,7 @@ These fault conditions cannot be triggered via external interfaces on production
 
 **Automation:** pytest, requests, paho-mqtt. POST /api/config wallbox topic, verify MQTT subscription updated.
 
-### 5.7 WEB-106: Setup Page - Factory Reset
+### WEB-106: Setup Page - Factory Reset
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -955,7 +1689,7 @@ These fault conditions cannot be triggered via external interfaces on production
 
 **Automation:** pytest, requests. POST /api/config {"type":"reset"}, wait for reboot, verify defaults via GET /api/config.
 
-### 5.8 WEB-107: REST API /api/status
+### WEB-107: REST API /api/status
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -970,7 +1704,7 @@ These fault conditions cannot be triggered via external interfaces on production
 
 **Automation:** pytest, requests. GET /api/status, validate all documented fields present with correct JSON types.
 
-### 5.9 WEB-108: Restart via Web UI
+### WEB-108: Restart via Web UI
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
@@ -986,7 +1720,7 @@ These fault conditions cannot be triggered via external interfaces on production
 
 **Automation:** pytest, requests. POST /api/restart, wait ~15s, verify GET / responds with 200 OK.
 
-### 5.10 WEB-109: mDNS Hostname
+### WEB-109: mDNS Hostname
 
 **Precondition:**
 - DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
@@ -1002,160 +1736,110 @@ These fault conditions cannot be triggered via external interfaces on production
 
 **Automation:** pytest, subprocess. Run `avahi-resolve -n modbus-proxy.local` on Pi via SSH, verify resolved IP matches known DUT IP, GET /api/status via resolved address.
 
-### 5.11 CP-101: Captive Portal WiFi Configuration
+## 13. Long-Duration Tests (LD-0xx)
 
-**Precondition:**
-- DUT in captive portal mode (triggered via GPIO): `wt.gpio_set(17, 0)` + `wt.serial_reset(SLOT)` + `wt.gpio_set(17, "z")`
-- Portal AP visible: `wt.scan()` shows `MODBUS-Proxy-Setup` SSID
-- Portal AP joinable: `wt.sta_join("MODBUS-Proxy-Setup", "modbus-setup")` succeeds
+### LD-001: Sustained Operation Under Load (24h)
 
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | In portal mode | Connected to "MODBUS-Proxy-Setup" AP |
-| 2 | Scan for networks | GET /api/scan returns nearby networks |
-| 3 | Select network, enter password | Fill form |
-| 4 | Click Save | POST /api/wifi saves credentials |
-| 5 | Device restarts | Connects to configured network |
-
-**Pass Criteria**: WiFi credentials saved via portal, device connects on restart.
-
-**Automation:** pytest, WiFi Tester (HTTP relay). In portal mode: GET /api/scan, POST /api/wifi with test AP credentials via relay, verify DUT joins new AP.
-
-### 5.12 CP-102: Captive Portal Timeout
-
-**Precondition:**
-- DUT in captive portal mode (triggered via GPIO): `wt.gpio_set(17, 0)` + `wt.serial_reset(SLOT)` + `wt.gpio_set(17, "z")`
-- Portal AP visible: `wt.scan()` shows `MODBUS-Proxy-Setup` SSID
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Trigger captive portal mode | AP active |
-| 2 | Do nothing for 5 minutes | Timeout reached |
-| 3 | Device restarts | Attempts normal WiFi connection |
-
-**Pass Criteria**: Portal doesn't run indefinitely; 5-minute timeout triggers restart.
-
-**Automation:** pytest, WiFi Tester (GPIO + serial reset). Trigger portal via `wt.gpio_set(17, 0)` + `wt.serial_reset(SLOT)`, release GPIO, wait 5+ minutes, verify DUT restarts (AP disappears, STA reconnects).
-
----
-
-## 6. Long-Duration Tests
-
-### 6.1 LD-001: Continuous Modbus Proxy (24h)
+Consolidates heap monitoring, MQTT traffic, mixed usage, and watchdog stability into a single 24h test with realistic mixed traffic.
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
 - MQTT connected: `/api/status` → `mqtt_connected: true`
-- Baseline heap: record `/api/status` → `free_heap`, `min_free_heap`
-- Baseline uptime: record `/api/status` → `uptime`
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Start 24h monitoring script | Polls `/api/status` every 60s |
-| 2 | Record `free_heap` and `min_free_heap` each poll | Values logged |
-| 3 | After 24h, compare heap trend | `free_heap` drift < 1KB from baseline |
-| 4 | Check `uptime` | Continuously increasing (no resets) |
-
-**Pass Criteria**: No memory leaks, stable heap, no unexpected resets over 24 hours.
-
-**Automation:** pytest, requests. Long-running script polling `/api/status` every 60s, asserting heap stability and uptime continuity.
-
-### 6.2 LD-002: MQTT Publish Every Second (24h)
-
-**Precondition:**
-- DUT reachable: `GET /api/status` → 200 OK
-- MQTT connected: `/api/status` → `mqtt_connected: true`
-- Baseline: record `/api/status` → `mqtt_reconnects`
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Publish wallbox power to `wallbox` topic every 1s | Sustained 1 msg/s |
-| 2 | Subscribe to `MBUS-PROXY/power` | Verify messages arrive |
-| 3 | After 24h, check `mqtt_reconnects` | 0 unexpected disconnects |
-| 4 | Check queue/heap | No overflow, stable memory |
-
-**Pass Criteria**: No MQTT disconnects, no queue overflow, stable heap over 24 hours.
-
-**Automation:** pytest, paho-mqtt, requests. Publisher thread at 1 msg/s, subscriber verifies delivery, periodic `/api/status` heap check.
-
-### 6.3 LD-003: Idle with Health Reports (72h)
-
-**Precondition:**
-- DUT reachable: `GET /api/status` → 200 OK
-- MQTT connected: `/api/status` → `mqtt_connected: true`
-- Baseline uptime: record `/api/status` → `uptime`
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Leave DUT idle for 72h | No external traffic |
-| 2 | Subscribe to `MBUS-PROXY/health` | Health reports arrive periodically |
-| 3 | Poll `/api/status` every 5 min | Uptime continuously increasing |
-| 4 | After 72h, check for resets | `uptime` > 259200 (72h in seconds) |
-
-**Pass Criteria**: No watchdog resets, continuous operation for 72 hours.
-
-**Automation:** pytest, paho-mqtt, requests. Subscribe to health topic, periodic `/api/status` polling, assert uptime continuity.
-
-### 6.4 LD-004: Normal Usage Pattern (7d)
-
-**Precondition:**
-- DUT reachable: `GET /api/status` → 200 OK
-- MQTT connected: `/api/status` → `mqtt_connected: true`
-- Baseline uptime: record `/api/status` → `uptime`
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Simulate normal usage: periodic wallbox power, config queries | Mixed traffic |
-| 2 | Poll `/api/status` every 15 min for 7 days | All checks pass |
-| 3 | After 7d, count resets | `< 1 unexpected reset` |
-| 4 | Final heap check | Stable, no persistent leak |
-
-**Pass Criteria**: < 1 unexpected reset over 7 days of normal operation.
-
-**Automation:** pytest, paho-mqtt, requests. Mixed traffic script with periodic health checks over 7 days.
-
-### 6.5 LD-005: Watchdog Stability (24h)
-
-**Precondition:**
-- DUT reachable: `GET /api/status` → 200 OK
-- MQTT connected: `/api/status` → `mqtt_connected: true`
-- Baseline uptime: record `/api/status` → `uptime`
 - Baseline heap: record `/api/status` → `free_heap`
+- Baseline uptime: record `/api/status` → `uptime`
+- Baseline counters: record `/api/status` → `mqtt_reconnects`, `wallbox_updates`, `wallbox_errors`
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | Run 24h with normal traffic | Watchdog task running |
-| 2 | Subscribe to `MBUS-PROXY/health` | Health reports arrive every 5s |
-| 3 | Monitor for watchdog trigger messages | None expected |
-| 4 | After 24h, check `uptime` | Continuously increasing |
-| 5 | Check heap stability | `free_heap` drift < 1KB |
+| 1 | Subscribe to `MBUS-PROXY/health` and `MBUS-PROXY/log` | Subscriptions active |
+| 2 | Start wallbox power publisher at 1 msg/s on `wallbox` topic | Sustained 1 msg/s (86,400 messages over 24h) |
+| 3 | Start config query loop: publish `get_config` to `MBUS-PROXY/cmd/config` every 5 min | 288 queries over 24h |
+| 4 | Start web UI poll loop: `GET /api/status` every 60s | 1,440 polls over 24h, all return 200 OK |
+| 5 | On each `/api/status` poll, record `free_heap`, `uptime`, `wallbox_updates`, `mqtt_reconnects` | Values logged to time-series |
+| 6 | Monitor `MBUS-PROXY/log` for watchdog trigger messages | No watchdog messages received |
+| 7 | After 24h, analyze collected data | All pass criteria met (see below) |
 
-**Pass Criteria**: No false watchdog triggers, heap stable over 24 hours.
+**Pass Criteria** (all must hold):
+- `free_heap` drift < 1 KB from baseline (no memory leak)
+- `uptime` strictly increasing across all polls (no resets)
+- `mqtt_reconnects` = 0 (no unexpected disconnects)
+- `wallbox_updates` increases monotonically (no stalls > 60s)
+- No watchdog trigger messages on `MBUS-PROXY/log`
+- Final `wallbox_errors` < 0.1% of total messages sent (< 87 errors out of 86,400)
 
-**Automation:** pytest, paho-mqtt, requests. Subscribe to health/log topics, alert on watchdog messages, periodic heap polling.
+**Duration:** 24h
 
-### 6.6 LD-006: Repeated WiFi/MQTT Disconnects (48h)
+**Automation:** pytest, paho-mqtt, requests. Three concurrent threads: (1) wallbox publisher at 1 msg/s, (2) config query loop every 5 min, (3) `/api/status` poller every 60s logging heap/uptime/counters. MQTT subscriber on health + log topics monitors for watchdog events. Post-run analysis asserts all numeric criteria.
+
+### LD-002: Resilience Cycles (8h)
+
+Tests MQTT broker and WiFi AP disconnect/reconnect resilience with the same number of cycles as the old 48h test, compressed into 8 hours.
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
 - MQTT connected: `/api/status` → `mqtt_connected: true`
-- MQTT broker accessible via SSH: `ssh broker-host "systemctl is-active mosquitto"` → `active`
+- WiFi Tester AP running: `wt.ap_status()["active"] == True`
+- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
+- MQTT broker accessible via SSH: `ssh pi@192.168.0.87 "systemctl is-active mosquitto"` → `active`
+- Baseline heap: record `/api/status` → `free_heap`
 - Baseline uptime: record `/api/status` → `uptime`
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | Cycle MQTT broker stop/start every 30 min for 48h | Repeated disconnects |
-| 2 | After each restart, verify MQTT reconnects | `mqtt_connected: true` within 30s |
-| 3 | Monitor for watchdog triggers | None expected during normal reconnect |
-| 4 | After 48h, check `uptime` | Continuously increasing (no resets) |
+| 1 | Subscribe to `MBUS-PROXY/log` | Subscription active |
+| 2 | Start background wallbox power publisher at 1 msg/s | Continuous between disruptions |
+| 3 | Every 15 min: stop MQTT broker, wait 30s, restart broker | 32 broker cycles over 8h |
+| 4 | After each broker restart: poll `/api/status` until `mqtt_connected: true` | Reconnects within 30s (32/32) |
+| 5 | Every 2h: stop WiFi AP, wait 60s, restart WiFi AP | 4 WiFi cycles over 8h |
+| 6 | After each WiFi restart: poll `/api/status` (via WiFi Tester relay) until reachable | DUT reconnects within 60s (4/4) |
+| 7 | On each `/api/status` poll, record `free_heap` and `uptime` | Values logged |
+| 8 | Monitor `MBUS-PROXY/log` for watchdog trigger messages | No watchdog messages received |
+| 9 | After 8h, analyze collected data | All pass criteria met (see below) |
 
-**Pass Criteria**: Watchdog does not trigger during normal reconnect cycles over 48 hours.
+**Pass Criteria** (all must hold):
+- All 32 MQTT reconnections succeed within 30s
+- All 4 WiFi reconnections succeed within 60s
+- `uptime` strictly increasing across all polls (no unexpected resets)
+- `free_heap` drift < 2 KB over full run
+- No watchdog trigger messages on `MBUS-PROXY/log`
 
-**Automation:** pytest, paho-mqtt, requests, subprocess (SSH). Script cycles mosquitto stop/start, verifies reconnection, monitors for unexpected reboots.
+**Duration:** 8h
 
-## 7. Test Commands Reference
+**Automation:** pytest, paho-mqtt, requests, WiFi Tester (ap_stop/ap_start), subprocess (SSH). Main loop: publish wallbox at 1 msg/s. Broker cycle thread: `ssh pi@192.168.0.87 sudo systemctl stop mosquitto`, sleep 30s, restart, poll `/api/status` for `mqtt_connected`. WiFi cycle thread: `wt.ap_stop()`, sleep 60s, `wt.ap_start()`, poll via relay. Post-run analysis asserts all numeric criteria.
 
-### 7.1 MQTT Test Commands
+### LD-003: Idle Stability (24h)
+
+Verifies the DUT remains stable with zero external traffic for 24 hours — catches timer leaks, background task issues, and watchdog false positives.
+
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
+- Baseline heap: record `/api/status` → `free_heap`
+- Baseline uptime: record `/api/status` → `uptime`
+- No wallbox traffic: no messages on `wallbox` topic
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Subscribe to `MBUS-PROXY/health` | Subscription active |
+| 2 | Do NOT send any MQTT wallbox messages, config commands, or web UI requests | DUT is idle |
+| 3 | Poll `/api/status` every 5 min (288 polls over 24h) | All return 200 OK |
+| 4 | On each poll, record `free_heap`, `uptime`, `mqtt_connected` | Values logged |
+| 5 | Track health report arrivals on `MBUS-PROXY/health` | At least 1 health report between consecutive polls |
+| 6 | After 24h, analyze collected data | All pass criteria met (see below) |
+
+**Pass Criteria** (all must hold):
+- `uptime` > 86,400 (24h in seconds, no resets)
+- `free_heap` drift < 512 bytes from baseline (tighter threshold since no traffic)
+- `mqtt_connected: true` on every poll
+- Health reports arrive consistently (at least 1 per 5-min poll interval)
+
+**Duration:** 24h
+
+**Automation:** pytest, paho-mqtt, requests. MQTT subscriber on health topic counts arrivals per interval. Poller thread: `GET /api/status` every 5 min, logging heap/uptime/mqtt_connected. No publisher threads. Post-run analysis asserts all numeric criteria.
+
+## 14. Test Commands Reference
+
+### 14.1 MQTT Test Commands
 
 ```bash
 # Subscribe to all MBUS-PROXY topics
@@ -1183,7 +1867,7 @@ mosquitto_pub -h 192.168.4.1 -t "MBUS-PROXY/cmd/config" -m '{"cmd": "set_mqtt", 
 mosquitto_pub -h 192.168.4.1 -t "MBUS-PROXY/cmd/config" -m '{"cmd": "factory_reset"}'
 ```
 
-### 7.2 Build and Flash Commands
+### 14.2 Build and Flash Commands
 
 ```bash
 # Build environments
@@ -1207,7 +1891,7 @@ curl -X POST http://<DUT_IP>/ota \
 pio device monitor -b 115200
 ```
 
-## 8. Test Report Template
+## 15. Test Report Template
 
 ```
 ═══════════════════════════════════════════════════════════════
@@ -1242,9 +1926,9 @@ NOTES
 ═══════════════════════════════════════════════════════════════
 ```
 
-## 9. Automated Test Edge Cases
+## 16. Automated Test Edge Cases
 
-### 9.1 Unit Test Edge Cases
+### 16.1 Unit Test Edge Cases
 
 These edge cases are covered by the unit tests (no hardware required):
 
@@ -1282,7 +1966,7 @@ These edge cases are covered by the unit tests (no hardware required):
 - Null termination of char[] fields at last byte position
 - Constants: CORRECTION_THRESHOLD=1000, WALLBOX_DATA_MAX_AGE_MS=30000, WATCHDOG_TIMEOUT_MS=60000, MIN_FREE_HEAP=20000
 
-### 9.2 Integration Test Edge Cases
+### 16.2 Integration Test Edge Cases
 
 These edge cases are covered by Python integration tests (requires live device + MQTT broker):
 
@@ -1314,828 +1998,6 @@ These edge cases are covered by Python integration tests (requires live device +
 
 ---
 
-## 10. WiFi Integration Tests (Automated via WiFi Tester)
-
-These tests use the [WiFi Tester](https://github.com/SensorsIot/Wifi-Tester) — a serial-controlled ESP32-C3 that acts as a programmable WiFi access point. All DUT HTTP communication goes through the WiFi Tester's serial relay. No manual intervention required.
-
-**Hardware required:** WiFi Tester (ESP32-C3 SuperMini) connected via USB serial.
-
-**Run:**
-```bash
-pip install -r test/wifi/requirements.txt
-pip install -e <path-to-Wifi-Tester>/pytest  # WiFi Tester driver
-
-# All WiFi tests
-WIFI_TESTER_URL=http://192.168.0.87:8080 pytest test/wifi/ -v
-
-# Skip slow captive portal tests
-pytest test/wifi/ -v -m "not captive_portal"
-
-# Only captive portal tests
-pytest test/wifi/ -v -m captive_portal
-```
-
-### 10.1 WiFi Connection Tests (WIFI-1xx)
-
-These tests verify the DUT connects to a WiFi Tester AP, obtains an IP, advertises mDNS, and serves its web interface on the isolated test network.
-
-#### WIFI-100: Connect to Test AP
-
-**Precondition:**
-- WiFi Tester reachable: `wt.get_mode()` responds
-- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
-- DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
-- WiFi Tester AP stopped: `wt.ap_status()["active"] == False`
-- Generate random SSID and password for this test run
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Trigger captive portal: `wt.gpio_set(17, 0)`, `wt.serial_reset(SLOT)` | Serial output contains `CAPTIVE PORTAL MODE TRIGGERED` |
-| 2 | Release GPIO: `wt.gpio_set(17, "z")` | Pin released to input with pull-up |
-| 3 | Join portal AP: `wt.sta_join("MODBUS-Proxy-Setup", "modbus-setup")` | Connected to portal AP |
-| 4 | Submit random credentials: `wt.http_post("http://192.168.4.1/api/wifi", json_data={"ssid": SSID, "password": PASS})` | 200 OK |
-| 5 | Leave portal: `wt.sta_leave()` | AP auto-restores |
-| 6 | Start test AP with random credentials: `wt.ap_start(SSID, PASS)` | AP active |
-| 7 | Wait for DUT to connect: `wt.wait_for_station(timeout=30)` | DUT appears as station |
-| 8 | Check DUT WiFi SSID via relay: `wt.http_get("http://<DUT_IP>/api/status")` → `wifi_ssid` | Matches random SSID |
-
-**Pass Criteria:** DUT connects to the test AP using provisioned credentials and reports the correct SSID via API.
-
-**Automation:** `pytest test/wifi/test_connection.py::test_connect_to_test_ap -v`
-
-#### WIFI-101: DHCP Address Assigned
-
-**Precondition:**
-- WiFi Tester AP running: `wt.ap_status()["active"] == True`
-- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
-- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Get DUT IP from AP status: `wt.ap_status()["stations"][0]["ip"]` | IP address returned |
-| 2 | Verify IP is in DHCP range | IP matches `192.168.4.x` (x > 1) |
-| 3 | Verify DUT self-reports same IP: `wt.http_get("http://<DUT_IP>/api/status")` → `wifi_ip` | Matches station IP |
-
-**Pass Criteria:** DUT receives a DHCP address in the 192.168.4.x range and self-reports the same IP.
-
-**Automation:** `pytest test/wifi/test_connection.py::test_dhcp_address -v`
-
-#### WIFI-102: mDNS Resolves on Test Network
-
-**Precondition:**
-- WiFi Tester AP running: `wt.ap_status()["active"] == True`
-- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
-- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
-- DUT WiFi connected: relay `/api/status` → `wifi_connected` is `true` (mDNS starts after WiFi connect)
-- avahi-utils installed on Pi: `avahi-resolve-host-name --version` exits 0
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Resolve mDNS from Pi: `avahi-resolve-host-name -4 modbus-proxy.local` | Returns DUT IP (192.168.4.x) |
-| 2 | Verify resolved IP matches DUT station IP | IPs match |
-| 3 | Access DUT via mDNS hostname through relay: `wt.http_get("http://modbus-proxy.local/api/status")` | 200 OK, valid JSON |
-
-**Pass Criteria:** `modbus-proxy.local` resolves to the DUT's IP on the test AP network, and the DUT is reachable via the mDNS hostname.
-
-**Automation:** `pytest test/wifi/test_connection.py::test_mdns_resolve -v`
-
-#### WIFI-103: Web Dashboard Accessible
-
-**Precondition:**
-- WiFi Tester AP running: `wt.ap_status()["active"] == True`
-- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
-- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Request dashboard: `wt.http_get("http://<DUT_IP>/")` | 200 OK |
-| 2 | Check Content-Type header | `text/html` |
-| 3 | Check body contains dashboard marker | HTML contains `<title>` and `Modbus Proxy` |
-
-**Pass Criteria:** DUT serves HTML dashboard page via the test AP relay.
-
-**Automation:** `pytest test/wifi/test_connection.py::test_web_dashboard -v`
-
-#### WIFI-104: REST API Accessible
-
-**Precondition:**
-- WiFi Tester AP running: `wt.ap_status()["active"] == True`
-- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
-- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Request API status: `wt.http_get("http://<DUT_IP>/api/status")` | 200 OK |
-| 2 | Parse response as JSON | Valid JSON with `fw_version`, `uptime`, `free_heap` fields |
-| 3 | Verify `wifi_connected` | `true` |
-| 4 | Verify `wifi_ssid` | Matches test AP SSID |
-
-**Pass Criteria:** DUT REST API returns valid JSON with correct status fields via the test AP relay.
-
-**Automation:** `pytest test/wifi/test_connection.py::test_rest_api -v`
-
-#### WIFI-105: Connect with WPA2
-
-**Precondition:**
-- WiFi Tester reachable: `wt.get_mode()` responds
-- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
-- DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
-- WiFi Tester AP stopped: `wt.ap_status()["active"] == False`
-- Generate random SSID and WPA2 password (8+ chars) for this test run
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Start WPA2 test AP: `wt.ap_start(SSID, PASS)` | AP active with WPA2 |
-| 2 | Trigger captive portal and provision DUT with WPA2 credentials | DUT accepts credentials (200 OK) |
-| 3 | Wait for DUT to connect: `wt.wait_for_station(timeout=30)` | DUT appears as station |
-| 4 | Verify via relay: `wt.http_get("http://<DUT_IP>/api/status")` → `wifi_ssid` | Matches SSID |
-| 5 | Verify `wifi_connected` | `true` |
-
-**Pass Criteria:** DUT authenticates with WPA2 and connects to the test AP.
-
-**Automation:** `pytest test/wifi/test_connection.py::test_wpa2_connect -v`
-
-#### WIFI-106: Connect to Open Network
-
-**Precondition:**
-- WiFi Tester reachable: `wt.get_mode()` responds
-- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
-- DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
-- WiFi Tester AP stopped: `wt.ap_status()["active"] == False`
-- Generate random SSID (no password) for this test run
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Start open test AP: `wt.ap_start(SSID)` (no password) | AP active, open network |
-| 2 | Trigger captive portal and provision DUT with open SSID (empty password) | DUT accepts credentials (200 OK) |
-| 3 | Wait for DUT to connect: `wt.wait_for_station(timeout=30)` | DUT appears as station |
-| 4 | Verify via relay: `wt.http_get("http://<DUT_IP>/api/status")` → `wifi_ssid` | Matches SSID |
-| 5 | Verify `wifi_connected` | `true` |
-
-**Pass Criteria:** DUT connects to an open (no password) test AP.
-
-**Automation:** `pytest test/wifi/test_connection.py::test_open_network_connect -v`
-
-### 10.2 AP Dropout and Reconnection (WIFI-2xx)
-
-These tests verify the DUT handles WiFi AP outages gracefully — reconnecting automatically, preserving uptime, and not leaking memory.
-
-#### WIFI-200: Reconnect After 5s AP Dropout
-
-**Precondition:**
-- WiFi Tester AP running: `wt.ap_status()["active"] == True`
-- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
-- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
-- Baseline uptime: record `/api/status` → `uptime` as `U_before` (via relay)
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Stop AP: `wt.ap_stop()` | AP stopped |
-| 2 | Wait 5 seconds | DUT loses WiFi |
-| 3 | Restart AP with same SSID/password: `wt.ap_start(SSID, PASS)` | AP active |
-| 4 | Wait for DUT to reconnect: `wt.wait_for_station(timeout=30)` | DUT appears as station |
-| 5 | Verify via relay: `wt.http_get("http://<DUT_IP>/api/status")` → `uptime` | `uptime` > `U_before` (no reboot) |
-
-**Pass Criteria:** DUT auto-reconnects within 30s after AP returns, without rebooting.
-
-**Automation:** `pytest test/wifi/test_reconnect.py::test_5s_dropout -v`
-
-#### WIFI-201: Reconnect After DUT Reset, MQTT Recovers
-
-**Precondition:**
-- WiFi Tester AP running: `wt.ap_status()["active"] == True`
-- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
-- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
-- MQTT broker on Pi: `mosquitto_pub -h 192.168.4.1 -u admin -P admin -t test -m ok` succeeds
-- DUT MQTT connected: relay `/api/status` → `mqtt_connected` is `true`
-- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
-- Baseline uptime: record relay `/api/status` → `uptime` as `U_before`
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Reset DUT: `wt.serial_reset(SLOT)` | DUT reboots |
-| 2 | Wait for DUT: `wt.wait_for_station(timeout=30)` | DUT reconnects to test AP |
-| 3 | Check WiFi via relay: `/api/status` → `wifi_connected` | `true` |
-| 4 | Wait up to 10s, check MQTT via relay: `/api/status` → `mqtt_connected` | `true` (MQTT reconnected to Pi broker) |
-| 5 | Verify uptime reset via relay: `/api/status` → `uptime` | `uptime` < `U_before` (DUT rebooted) |
-
-**Pass Criteria:** DUT reconnects to test AP and re-establishes MQTT connection to Pi broker within 30s after reset.
-
-**Automation:** `pytest test/wifi/test_reconnect.py::test_reset_mqtt_recovery -v`
-
-#### WIFI-202: Extended 90s Dropout
-
-**Precondition:**
-- WiFi Tester AP running: `wt.ap_status()["active"] == True`
-- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
-- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
-- Baseline uptime: record `/api/status` → `uptime` as `U_before` (via relay)
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Stop AP: `wt.ap_stop()` | AP stopped |
-| 2 | Wait 90 seconds | Extended outage |
-| 3 | Restart AP: `wt.ap_start(SSID, PASS)` | AP active |
-| 4 | Wait for DUT: `wt.wait_for_station(timeout=60)` | DUT reconnects |
-| 5 | Verify uptime via relay: `/api/status` → `uptime` | `uptime` > `U_before` (no reboot) |
-
-**Pass Criteria:** DUT recovers even after 90s outage without rebooting.
-
-**Automation:** `pytest test/wifi/test_reconnect.py::test_90s_dropout -v`
-
-#### WIFI-203: AP SSID Changes
-
-**Precondition:**
-- WiFi Tester AP running: `wt.ap_status()["active"] == True`
-- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
-- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
-- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Stop AP: `wt.ap_stop()` | AP stopped |
-| 2 | Start AP with different SSID: `wt.ap_start("Wrong-SSID", PASS)` | AP active with wrong SSID |
-| 3 | Wait 15 seconds | DUT cannot find its SSID |
-| 4 | Check AP stations: `wt.ap_status()["stations"]` | Empty — DUT did not connect |
-| 5 | Monitor serial: `wt.serial_monitor(SLOT, timeout=5)` | DUT running (not crashed) |
-| 6 | Restore correct AP: `wt.ap_stop()` then `wt.ap_start(SSID, PASS)` | Correct AP back |
-| 7 | Wait for DUT: `wt.wait_for_station(timeout=30)` | DUT reconnects |
-
-**Pass Criteria:** DUT does not connect to wrong SSID and reconnects when correct SSID returns.
-
-**Automation:** `pytest test/wifi/test_reconnect.py::test_ssid_change -v`
-
-#### WIFI-204: AP Password Changes
-
-**Precondition:**
-- WiFi Tester AP running: `wt.ap_status()["active"] == True`
-- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
-- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
-- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Stop AP: `wt.ap_stop()` | AP stopped |
-| 2 | Start AP with same SSID, different password: `wt.ap_start(SSID, "wrongpass99")` | AP active |
-| 3 | Wait 15 seconds | DUT finds SSID but auth fails |
-| 4 | Check AP stations: `wt.ap_status()["stations"]` | Empty — DUT auth rejected |
-| 5 | Monitor serial: `wt.serial_monitor(SLOT, timeout=5)` | DUT running (not crashed) |
-| 6 | Restore correct password: `wt.ap_stop()` then `wt.ap_start(SSID, PASS)` | Correct AP back |
-| 7 | Wait for DUT: `wt.wait_for_station(timeout=30)` | DUT reconnects |
-
-**Pass Criteria:** DUT cannot connect with old password and reconnects when correct password is restored.
-
-**Automation:** `pytest test/wifi/test_reconnect.py::test_password_change -v`
-
-#### WIFI-205: 5 Reset Cycles, Heap Stable
-
-**Precondition:**
-- WiFi Tester AP running: `wt.ap_status()["active"] == True`
-- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
-- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
-- MQTT broker on Pi: `mosquitto_pub -h 192.168.4.1 -u admin -P admin -t test -m ok` succeeds
-- DUT MQTT connected: relay `/api/status` → `mqtt_connected` is `true`
-- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
-- Baseline heap: record relay `/api/status` → `free_heap` as `H_before`
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Repeat 5 times: `wt.serial_reset(SLOT)`, `wt.wait_for_station(timeout=30)`, verify relay `/api/status` → `mqtt_connected` is `true` | DUT reconnects WiFi + MQTT each cycle |
-| 2 | After cycle 5: relay `/api/status` → `free_heap` as `H_after` | Value returned |
-| 3 | Compare heap: `H_after` >= `H_before - 1000` | No significant heap loss |
-
-**Pass Criteria:** DUT reconnects WiFi and MQTT 5 times with free heap remaining within 1000 bytes of baseline (no memory leak).
-
-**Automation:** `pytest test/wifi/test_reconnect.py::test_heap_stability -v`
-
-### 10.3 Invalid Credentials (WIFI-3xx)
-
-These tests verify the DUT handles wrong or missing WiFi credentials gracefully without crashing, and recovers when correct credentials are provided.
-
-#### WIFI-300: Wrong Password
-
-**Precondition:**
-- WiFi Tester reachable: `wt.get_mode()` responds
-- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
-- WiFi Tester AP running with known credentials: `wt.ap_status()["active"] == True`
-- DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Trigger captive portal and provision DUT with correct SSID but wrong password | 200 OK — credentials accepted by portal |
-| 2 | Wait 15 seconds | DUT attempts to connect with wrong password |
-| 3 | Check AP stations: `wt.ap_status()["stations"]` | Empty — DUT auth rejected |
-| 4 | Monitor serial: `wt.serial_monitor(SLOT, timeout=5)` | DUT running, no crash, shows WiFi connection failure |
-
-**Pass Criteria:** DUT fails gracefully with wrong password — no crash, no reboot loop.
-
-**Automation:** `pytest test/wifi/test_credentials.py::test_wrong_password -v`
-
-#### WIFI-301: Wrong SSID
-
-**Precondition:**
-- WiFi Tester reachable: `wt.get_mode()` responds
-- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
-- WiFi Tester AP running: `wt.ap_status()["active"] == True`
-- DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Trigger captive portal and provision DUT with non-existent SSID and any password | 200 OK — credentials accepted by portal |
-| 2 | Wait 15 seconds | DUT searches for non-existent SSID |
-| 3 | Check AP stations: `wt.ap_status()["stations"]` | Empty — DUT not connected |
-| 4 | Monitor serial: `wt.serial_monitor(SLOT, timeout=5)` | DUT running, no crash |
-
-**Pass Criteria:** DUT fails gracefully when SSID doesn't exist — no crash, no reboot loop.
-
-**Automation:** `pytest test/wifi/test_credentials.py::test_wrong_ssid -v`
-
-#### WIFI-302: Empty Password for WPA2 AP
-
-**Precondition:**
-- WiFi Tester reachable: `wt.get_mode()` responds
-- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
-- WiFi Tester AP running with WPA2 (password set): `wt.ap_status()["active"] == True`
-- DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Trigger captive portal and provision DUT with correct SSID but empty password | 200 OK — credentials accepted by portal |
-| 2 | Wait 15 seconds | DUT attempts to connect with empty password |
-| 3 | Check AP stations: `wt.ap_status()["stations"]` | Empty — auth fails |
-| 4 | Monitor serial: `wt.serial_monitor(SLOT, timeout=5)` | DUT running, no crash |
-
-**Pass Criteria:** DUT handles empty password for WPA2 AP without crashing.
-
-**Automation:** `pytest test/wifi/test_credentials.py::test_empty_password -v`
-
-#### WIFI-303: Correct Credentials After Bad
-
-**Precondition:**
-- WiFi Tester reachable: `wt.get_mode()` responds
-- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
-- WiFi Tester AP running: `wt.ap_status()["active"] == True`
-- DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Trigger captive portal and provision DUT with wrong password | 200 OK |
-| 2 | Wait 15 seconds | DUT fails to connect |
-| 3 | Trigger captive portal again (3 rapid resets or GPIO) | Portal mode active |
-| 4 | Provision DUT with correct SSID and password | 200 OK |
-| 5 | Wait for DUT to connect: `wt.wait_for_station(timeout=30)` | DUT connects |
-| 6 | Verify via relay: `wt.http_get("http://<DUT_IP>/api/status")` → `wifi_connected` | `true` |
-
-**Pass Criteria:** DUT recovers and connects after receiving correct credentials following a failed attempt.
-
-**Automation:** `pytest test/wifi/test_credentials.py::test_correct_after_bad -v`
-
-### 10.4 Captive Portal (WIFI-4xx)
-
-These tests verify the captive portal UI, WiFi scanning, provisioning flow, DNS redirect, timeout behavior, and that portal mode is not entered accidentally.
-
-#### WIFI-401: Portal Page Accessible
-
-**Precondition:**
-- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
-- DUT in captive portal mode: trigger via `wt.gpio_set(17, 0)` + `wt.serial_reset(SLOT)`, verify serial contains `CAPTIVE PORTAL MODE TRIGGERED`, then `wt.gpio_set(17, "z")`
-- WiFi Tester joined portal AP: `wt.sta_join("MODBUS-Proxy-Setup", "modbus-setup")` succeeds
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Request portal page: `wt.http_get("http://192.168.4.1/")` | 200 OK |
-| 2 | Check Content-Type | `text/html` |
-| 3 | Check body contains portal UI elements | HTML contains WiFi setup form |
-
-**Pass Criteria:** Portal HTML page is served on 192.168.4.1 with WiFi configuration form.
-
-**Automation:** `pytest test/wifi/test_portal.py::test_portal_page -v`
-
-#### WIFI-402: WiFi Scan Endpoint in Portal
-
-**Precondition:**
-- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
-- DUT in captive portal mode: trigger via GPIO, verify serial output
-- WiFi Tester joined portal AP: `wt.sta_join("MODBUS-Proxy-Setup", "modbus-setup")` succeeds
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Request scan: `wt.http_get("http://192.168.4.1/api/scan")` | 200 OK |
-| 2 | Parse response as JSON | Valid JSON array |
-| 3 | Check array contains at least one network | Each entry has `ssid` and `rssi` fields |
-
-**Pass Criteria:** `/api/scan` returns a JSON list of nearby WiFi networks with SSID and RSSI.
-
-**Automation:** `pytest test/wifi/test_portal.py::test_wifi_scan -v`
-
-#### WIFI-403: Full Provisioning Flow
-
-**Precondition:**
-- WiFi Tester reachable: `wt.get_mode()` responds
-- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
-- DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
-- WiFi Tester AP stopped: `wt.ap_status()["active"] == False`
-- Generate random SSID and password for this test run
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Trigger captive portal via GPIO | Serial confirms `CAPTIVE PORTAL MODE TRIGGERED` |
-| 2 | Join portal AP: `wt.sta_join("MODBUS-Proxy-Setup", "modbus-setup")` | Connected |
-| 3 | Scan networks: `wt.http_get("http://192.168.4.1/api/scan")` | 200 OK, JSON array |
-| 4 | Submit credentials: `wt.http_post("http://192.168.4.1/api/wifi", json_data={"ssid": SSID, "password": PASS})` | 200 OK |
-| 5 | Leave portal: `wt.sta_leave()` | AP auto-restores |
-| 6 | Start test AP: `wt.ap_start(SSID, PASS)` | AP active |
-| 7 | Wait for DUT: `wt.wait_for_station(timeout=30)` | DUT connects to test AP |
-| 8 | Verify via relay: `/api/status` → `wifi_ssid` | Matches random SSID |
-
-**Pass Criteria:** Complete portal flow — scan, submit credentials, DUT connects to provisioned AP.
-
-**Automation:** `pytest test/wifi/test_portal.py::test_full_provisioning -v`
-
-#### WIFI-404: Portal DNS Redirect
-
-**Precondition:**
-- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
-- DUT in captive portal mode: trigger via GPIO, verify serial output
-- WiFi Tester joined portal AP: `wt.sta_join("MODBUS-Proxy-Setup", "modbus-setup")` succeeds
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Request Android captive portal URL: `wt.http_get("http://192.168.4.1/generate_204")` | Redirect (302) or portal page (200) |
-| 2 | Request Apple captive portal URL: `wt.http_get("http://192.168.4.1/hotspot-detect.html")` | Redirect or portal page |
-| 3 | Request Windows captive portal URL: `wt.http_get("http://192.168.4.1/connecttest.txt")` | Redirect or portal page |
-
-**Pass Criteria:** All standard captive portal detection URLs return a redirect or the portal page, triggering OS captive portal UI.
-
-**Automation:** `pytest test/wifi/test_portal.py::test_dns_redirect -v`
-
-#### WIFI-405: Portal Timeout (5 min)
-
-**Precondition:**
-- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
-- DUT in captive portal mode: trigger via GPIO, verify serial output
-- Record start time
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Monitor serial for timeout message: `wt.serial_monitor(SLOT, pattern="Captive portal timeout", timeout=330)` | Pattern matched within ~5 min (300s + margin) |
-| 2 | Monitor serial for reboot: `wt.serial_monitor(SLOT, pattern="SPI_FAST_FLASH_BOOT", timeout=15)` | DUT reboots after timeout |
-
-**Pass Criteria:** Portal auto-exits and DUT reboots after 5 minutes (300s) of inactivity.
-
-**Automation:** `pytest test/wifi/test_portal.py::test_portal_timeout -v`
-
-**Duration:** ~5.5 minutes
-
-#### WIFI-406: Normal Boot No Portal
-
-**Precondition:**
-- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
-- GPIO 17 in input with pull-up state: `wt.gpio_set(17, "z")`
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Reset DUT: `wt.serial_reset(SLOT)` | DUT reboots |
-| 2 | Check serial output does NOT contain portal trigger | No `CAPTIVE PORTAL MODE TRIGGERED` in output |
-| 3 | Monitor serial for normal boot: `wt.serial_monitor(SLOT, pattern="WiFi connected", timeout=30)` | DUT connects to WiFi normally |
-
-**Pass Criteria:** DUT boots normally without entering portal mode when GPIO 2 is not held low.
-
-**Automation:** `pytest test/wifi/test_portal.py::test_normal_boot_no_portal -v`
-
-### 10.5 Credential Management (WIFI-5xx)
-
-These tests verify that WiFi credentials are stored in NVS, take priority over compiled fallbacks, can be updated via API, and handle edge cases like long SSIDs and special characters.
-
-#### WIFI-500: NVS Credentials Persist
-
-**Precondition:**
-- WiFi Tester AP running: `wt.ap_status()["active"] == True`
-- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
-- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
-- DUT MQTT connected: relay `/api/status` → `mqtt_connected` is `true`
-- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Record current SSID via relay: `/api/status` → `wifi_ssid` | Test AP SSID |
-| 2 | Reset DUT: `wt.serial_reset(SLOT)` | DUT reboots |
-| 3 | Wait for DUT: `wt.wait_for_station(timeout=30)` | DUT reconnects to test AP |
-| 4 | Verify SSID unchanged via relay: `/api/status` → `wifi_ssid` | Same test AP SSID |
-| 5 | Verify MQTT reconnected via relay: `/api/status` → `mqtt_connected` | `true` |
-
-**Pass Criteria:** DUT reconnects to test AP and MQTT broker after reboot using NVS-stored credentials.
-
-**Automation:** `pytest test/wifi/test_credentials.py::test_nvs_persist -v`
-
-#### WIFI-501: NVS Credentials Survive MQTT Reconnect
-
-**Precondition:**
-- WiFi Tester AP running: `wt.ap_status()["active"] == True`
-- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
-- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
-- DUT MQTT connected: relay `/api/status` → `mqtt_connected` is `true`
-- Baseline: record relay `/api/status` → `wifi_ssid` as `SSID_before`
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Restart MQTT broker on Pi: `ssh pi@192.168.0.87 sudo systemctl restart mosquitto` | Broker restarts |
-| 2 | Wait 10s for DUT to detect disconnect and reconnect | MQTT reconnect cycle |
-| 3 | Verify WiFi stable via relay: `/api/status` → `wifi_connected` | `true` (WiFi never dropped) |
-| 4 | Verify MQTT reconnected via relay: `/api/status` → `mqtt_connected` | `true` |
-| 5 | Verify SSID unchanged via relay: `/api/status` → `wifi_ssid` | Matches `SSID_before` |
-
-**Pass Criteria:** WiFi credentials in NVS remain intact after MQTT broker restart; DUT stays on same SSID and re-establishes MQTT.
-
-**Automation:** `pytest test/wifi/test_credentials.py::test_nvs_mqtt_reconnect -v`
-
-#### WIFI-502: POST /api/wifi Saves and Reboots
-
-**Precondition:**
-- WiFi Tester AP running: `wt.ap_status()["active"] == True`
-- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
-- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
-- DUT MQTT connected: relay `/api/status` → `mqtt_connected` is `true`
-- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
-- Generate a second random SSID and password
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | POST new credentials via relay: `wt.http_post("http://<DUT_IP>/api/wifi", json_data={"ssid": SSID2, "password": PASS2})` | 200 OK |
-| 2 | Monitor serial for reboot: `wt.serial_monitor(SLOT, pattern="SPI_FAST_FLASH_BOOT", timeout=15)` | DUT reboots |
-| 3 | Stop old AP, start new AP: `wt.ap_stop()` then `wt.ap_start(SSID2, PASS2)` | New AP active |
-| 4 | Wait for DUT: `wt.wait_for_station(timeout=30)` | DUT connects to new AP |
-| 5 | Verify SSID via relay: `/api/status` → `wifi_ssid` | Matches SSID2 |
-
-**Pass Criteria:** `/api/wifi` POST saves new credentials to NVS, DUT reboots and connects to the new AP.
-
-**Automation:** `pytest test/wifi/test_credentials.py::test_api_wifi_save -v`
-
-#### WIFI-503: Factory Reset Clears WiFi
-
-**Precondition:**
-- WiFi Tester AP running: `wt.ap_status()["active"] == True`
-- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
-- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
-- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Erase NVS via esptool | "Erase completed successfully" |
-| 2 | Monitor serial for reboot: `wt.serial_monitor(SLOT, pattern="SPI_FAST_FLASH_BOOT", timeout=15)` | DUT reboots |
-| 3 | Wait 15 seconds | DUT tries to connect to fallback WiFi |
-| 4 | Check AP stations: `wt.ap_status()["stations"]` | Empty — DUT did not connect to test AP |
-| 5 | Monitor serial: `wt.serial_monitor(SLOT, pattern="private-2G", timeout=15)` | DUT attempts fallback SSID |
-
-**Pass Criteria:** After NVS erase, DUT no longer connects to test AP and falls back to compiled credentials.
-
-**Automation:** `pytest test/wifi/test_credentials.py::test_factory_reset -v`
-
-#### WIFI-504: Long SSID (32 chars)
-
-**Precondition:**
-- WiFi Tester reachable: `wt.get_mode()` responds
-- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
-- DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
-- Generate 32-character random SSID and password
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Start AP with 32-char SSID: `wt.ap_start(SSID_32, PASS)` | AP active |
-| 2 | Trigger captive portal and provision DUT with 32-char SSID | 200 OK |
-| 3 | Wait for DUT: `wt.wait_for_station(timeout=30)` | DUT connects |
-| 4 | Verify via relay: `/api/status` → `wifi_ssid` | Full 32-char SSID matches |
-
-**Pass Criteria:** DUT handles maximum-length (32 char) SSID without truncation.
-
-**Automation:** `pytest test/wifi/test_credentials.py::test_long_ssid -v`
-
-#### WIFI-505: Special Characters in Password
-
-**Precondition:**
-- WiFi Tester reachable: `wt.get_mode()` responds
-- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
-- DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
-- Generate random SSID and password containing `!@#$%^&*()` characters
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Start AP with special-char password: `wt.ap_start(SSID, SPECIAL_PASS)` | AP active |
-| 2 | Trigger captive portal and provision DUT with special-char password | 200 OK |
-| 3 | Wait for DUT: `wt.wait_for_station(timeout=30)` | DUT connects |
-| 4 | Verify via relay: `/api/status` → `wifi_connected` | `true` |
-
-**Pass Criteria:** DUT handles special characters in WiFi password correctly.
-
-**Automation:** `pytest test/wifi/test_credentials.py::test_special_chars_password -v`
-
-### 10.6 Network Services on Test AP (WIFI-6xx)
-
-These tests verify that all DUT network services (REST API, OTA, RSSI reporting) work correctly on the isolated test AP network.
-
-#### WIFI-600: Full REST API via Relay
-
-**Precondition:**
-- WiFi Tester AP running: `wt.ap_status()["active"] == True`
-- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
-- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | GET `/api/status` via relay | 200 OK, valid JSON |
-| 2 | GET `/api/config` via relay | 200 OK, valid JSON with `wallbox_topic`, `mqtt_host` |
-| 3 | GET `/` via relay (dashboard) | 200 OK, HTML content |
-| 4 | GET `/status` via relay (status page) | 200 OK, HTML content |
-| 5 | GET `/setup` via relay (setup page) | 200 OK, HTML content |
-
-**Pass Criteria:** All key DUT endpoints respond correctly through the WiFi Tester relay on the isolated network.
-
-**Automation:** `pytest test/wifi/test_services.py::test_full_api -v`
-
-#### WIFI-601: OTA Health Check
-
-**Precondition:**
-- WiFi Tester AP running: `wt.ap_status()["active"] == True`
-- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
-- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | GET `/ota/health` via relay: `wt.http_get("http://<DUT_IP>/ota/health")` | 200 OK |
-| 2 | Parse response | JSON with `status: "ok"` |
-
-**Pass Criteria:** OTA health endpoint responds on the test AP network.
-
-**Automation:** `pytest test/wifi/test_services.py::test_ota_health -v`
-
-#### WIFI-602: RSSI Reported Correctly
-
-**Precondition:**
-- WiFi Tester AP running: `wt.ap_status()["active"] == True`
-- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
-- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | GET `/api/status` via relay | 200 OK |
-| 2 | Check `wifi_rssi` field | Integer value between -100 and -1 (dBm) |
-
-**Pass Criteria:** DUT reports a plausible negative RSSI value (between -100 and -1 dBm).
-
-**Automation:** `pytest test/wifi/test_services.py::test_rssi -v`
-
-#### WIFI-603: wifi_ssid Matches Test AP
-
-**Precondition:**
-- WiFi Tester AP running: `wt.ap_status()["active"] == True` — record SSID
-- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
-- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | GET `/api/status` via relay | 200 OK |
-| 2 | Check `wifi_ssid` field | Matches WiFi Tester AP SSID exactly |
-
-**Pass Criteria:** DUT reports the correct test AP SSID via its status API.
-
-**Automation:** `pytest test/wifi/test_services.py::test_ssid_match -v`
-
----
-
-## Appendix A: Test Classification and Execution Sequence
-
-Tests are classified by infrastructure requirement and executed in two phases. All functional tests run on the artificial network; long-duration tests run separately.
-
-### Classification Criteria
-
-| Category | DUT Network | Human Needed | Infrastructure |
-|----------|-------------|--------------|----------------|
-| **Artificial Network** | WiFi Tester AP (192.168.4.x) | No | Serial Portal, WiFi Tester AP, mosquitto on Pi |
-| **Long Duration** | WiFi Tester AP (192.168.4.x) | No | Same as above |
-
-### Phase 1: Functional Tests (74 tests)
-
-DUT connects to WiFi Tester AP (isolated network). MQTT broker runs on Pi (192.168.4.1). All HTTP access via WiFi Tester relay. No human intervention.
-
-| # | Test ID | Name |
-|---|---------|------|
-| | **Setup** | |
-| 1 | TC-000 | Flash Firmware and Erase NVS |
-| 2 | TC-001 | Verify Clean State (HTTP) |
-| 3 | TC-002 | Verify Clean State (MQTT) |
-| | **WiFi Connectivity** | |
-| 4 | WIFI-100 | Connect to test AP |
-| 5 | WIFI-101 | DHCP address assigned |
-| 6 | WIFI-102 | mDNS resolves on test network |
-| 7 | WIFI-103 | Web dashboard accessible |
-| 8 | WIFI-104 | REST API accessible |
-| 9 | WIFI-105 | Connect with WPA2 |
-| 10 | WIFI-106 | Connect to open network |
-| | **WiFi Reconnection** | |
-| 11 | WIFI-200 | Reconnect after 5s AP dropout |
-| 12 | WIFI-201 | Reconnect after DUT reset, MQTT recovers |
-| 13 | WIFI-202 | Extended 90s dropout |
-| 14 | WIFI-203 | AP SSID changes |
-| 15 | WIFI-204 | AP password changes |
-| 16 | WIFI-205 | 5 reset cycles, heap stable |
-| | **WiFi Invalid Credentials** | |
-| 17 | WIFI-300 | Wrong password |
-| 18 | WIFI-301 | Wrong SSID |
-| 19 | WIFI-302 | Empty password for WPA2 AP |
-| 20 | WIFI-303 | Correct creds after bad |
-| | **Captive Portal** | |
-| 21 | WIFI-401 | Portal page accessible |
-| 22 | WIFI-402 | WiFi scan endpoint in portal |
-| 23 | WIFI-403 | Full provisioning flow |
-| 24 | WIFI-404 | Portal DNS redirect |
-| 25 | WIFI-405 | Portal timeout (5 min) |
-| 26 | WIFI-406 | Normal boot no portal |
-| 27 | CP-101 | Captive Portal WiFi Configuration |
-| 28 | CP-102 | Captive Portal Timeout |
-| | **WiFi Credentials** | |
-| 29 | WIFI-500 | NVS credentials persist |
-| 30 | WIFI-501 | NVS credentials survive MQTT reconnect |
-| 31 | WIFI-502 | POST /api/wifi saves and reboots |
-| 32 | WIFI-503 | Factory reset clears WiFi |
-| 33 | WIFI-504 | Long SSID (32 chars) |
-| 34 | WIFI-505 | Special characters in password |
-| | **MQTT & Modbus** | |
-| 35 | TC-100 | Basic Startup |
-| 36 | TC-101 | Wallbox Power via MQTT (Plain Float) |
-| 37 | TC-102 | Wallbox Power via MQTT (JSON power key) |
-| 38 | TC-103 | Wallbox Power via MQTT (JSON chargePower key) |
-| 39 | TC-104 | Config Command - get_config |
-| 40 | TC-105 | Config Command - set_wallbox_topic |
-| 41 | TC-106 | Config Command - set_log_level |
-| 42 | TC-107 | Config Command - set_mqtt |
-| 43 | TC-108 | Config Command - factory_reset |
-| 44 | TC-109 | Power Correction Threshold |
-| 45 | TC-110 | Wallbox Data Staleness |
-| | **REST API** | |
-| 46 | WIFI-600 | Full REST API via relay |
-| 47 | WIFI-601 | OTA health check |
-| 48 | WIFI-602 | RSSI reported correctly |
-| 49 | WIFI-603 | wifi_ssid matches test AP |
-| | **Edge Cases** | |
-| 50 | EC-100 | MQTT Disconnect During Operation |
-| 51 | EC-101 | WiFi Disconnect During Operation |
-| 52 | EC-102 | Malformed Wallbox Power Message |
-| 53 | EC-103 | Malformed Config Command |
-| 54 | EC-104 | Oversized MQTT Message |
-| 55 | EC-105 | Rapid Wallbox Power Updates |
-| 56 | EC-106 | Power Cycle Recovery |
-| 57 | EC-107 | OTA Update |
-| 58 | EC-108 | Concurrent MQTT Publish and Subscribe |
-| 59 | EC-109 | MQTT Reconnect with Config Change |
-| 60 | EC-110 | Log Buffer Overflow |
-| 61 | EC-111 | Empty Wallbox Topic Message |
-| 62 | EC-112 | Special Characters in Config |
-| 63 | EC-116 | Watchdog Survives MQTT Disconnect |
-| | **Web UI** | |
-| 64 | WEB-100 | Dashboard Page Loads |
-| 65 | WEB-101 | Dashboard Power Color Coding |
-| 66 | WEB-102 | Status Page System Info |
-| 67 | WEB-103 | Setup Page - Debug Toggle |
-| 68 | WEB-104 | Setup Page - MQTT Configuration |
-| 69 | WEB-105 | Setup Page - Wallbox Topic |
-| 70 | WEB-106 | Setup Page - Factory Reset |
-| 71 | WEB-107 | REST API /api/status |
-| 72 | WEB-108 | Restart via Web UI |
-| 73 | WEB-109 | mDNS Hostname |
-
-**Precondition:** WiFi Tester AP running. mosquitto broker running on Pi (192.168.4.1). DUT NVS erased (clean state).
-
-**MQTT setup:** After WiFi provisioning, configure DUT MQTT to point to Pi broker: `POST /api/config` or `set_mqtt` command with host `192.168.4.1`.
-
-**Note:** WIFI-401 to WIFI-406 and CP-101/CP-102 require captive portal mode. Portal is triggered automatically via Serial Portal GPIO control: `wt.gpio_set(17, 0)` holds DUT GPIO 2 low, `wt.serial_reset(SLOT)` reboots into portal, `wt.gpio_set(17, "z")` releases. No human intervention required.
-
-### Phase 2: Long Duration Tests (6 tests)
-
-Extended stability tests. Run after all Phase 1 tests pass. Same artificial network infrastructure.
-
-| # | Test ID | Name | Duration |
-|---|---------|------|----------|
-| 1 | LD-001 | Continuous Modbus proxy | 24h |
-| 2 | LD-002 | MQTT publish every second | 24h |
-| 3 | LD-003 | Idle with health reports | 72h |
-| 4 | LD-004 | Normal usage pattern | 7d |
-| 5 | LD-005 | Watchdog stability | 24h |
-| 6 | LD-006 | Repeated WiFi/MQTT disconnects | 48h |
-
-**Precondition:** All Phase 1 tests passed. Same infrastructure running.
-
-### Summary
-
-| Phase | Category | Tests | Human | WiFi Tester | MQTT Broker (Pi) |
-|-------|----------|------:|:-----:|:-----------:|:----------------:|
-| 1 | Functional | 74 | No | Yes | Yes |
-| 2 | Long Duration | 6 | No | Yes | Yes |
-| | **Total** | **80** | | | |
-
-**Note:** 3 additional watchdog fault tests (EC-113/114/115) are verified by code review, not runtime execution. Total including code review: 83.
-
----
-
 ## Revision History
 
 | Version | Date | Changes |
@@ -2158,3 +2020,6 @@ Extended stability tests. Run after all Phase 1 tests pass. Same artificial netw
 | 2.5 | 2026-02-09 | Expanded all WIFI-1xx through WIFI-6xx from summary tables to individual test cases with own preconditions, step tables, pass criteria, and automation notes (33 test cases) |
 | 2.6 | 2026-02-09 | Moved WIFI-201, WIFI-205, WIFI-500, WIFI-501, WIFI-502 from Phase 2 to Phase 3 — these tests require MQTT broker (private-2G). Phase 2: 32 tests, Phase 3: 42 tests |
 | 3.0 | 2026-02-09 | Merged all phases into single artificial network with Pi mosquitto broker. Phase 1: 74 functional tests, Phase 2: 6 long-duration. Eliminated dependency on home network (private-2G). All tests run on isolated WiFi Tester AP + Pi broker (192.168.4.1) |
+| 3.1 | 2026-02-09 | Consolidated Phase 2 from 6 tests (LD-001–LD-006, 12+ days) to 3 focused tests (LD-001–LD-003, 56h). LD-001 merges heap/MQTT/mixed/watchdog into single 24h loaded test. LD-002 replaces 48h disconnect test with 8h resilience cycles (same cycle count). LD-003 reduces idle test from 72h to 24h. All pass criteria now numeric/machine-checkable. 77 runtime tests + 3 code review |
+| 4.0 | 2026-02-09 | Restructured sections to match execution order. WiFi tests (§4–§8, §10) now precede MQTT/Modbus (§9), Edge Cases (§11), and Web UI (§12) — matching how tests actually run. Merged CP-101/CP-102 into §7 Captive Portal alongside WIFI-4xx. Removed Appendix A (redundant now that document order = execution order). Dropped subsection numbers from test case headings (test IDs are the identifier). 77 runtime tests + 3 code review |
+| 4.1 | 2026-02-09 | Restructured §1.3 as "Test Strategy" explaining automated suites (171) vs test case specifications (79). Fixed FSD ref v5.5→v5.6, test counts (168→171, 33→35 WiFi, 58→59 integration). Added WiFi test file breakdown to §2.4. Trimmed §2.1.2 duplicate procedure. Added Duration fields to LD tests. Improved EC-100/EC-101 machine-checkability. Added edge case coverage checklist to §11 |
