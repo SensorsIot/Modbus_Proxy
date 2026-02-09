@@ -14,10 +14,10 @@ pytestmark = pytest.mark.wifi
 class TestInvalidCredentials:
     """WIFI-300 to WIFI-303: Invalid credential handling."""
 
-    def test_wrong_password(self, wifi_tester, dut_production_url):
+    def test_wrong_password(self, esp32_tester, dut_production_url):
         """WIFI-300: DUT fails gracefully with wrong password."""
         ssid = "SECURED-NET"
-        wifi_tester.ap_start(ssid, "correct_password")
+        esp32_tester.ap_start(ssid, "correct_password")
 
         try:
             # Provision DUT with wrong password
@@ -26,12 +26,12 @@ class TestInvalidCredentials:
 
             # DUT should NOT connect
             with pytest.raises(Exception):
-                wifi_tester.wait_for_station(timeout=35)
+                esp32_tester.wait_for_station(timeout=35)
         finally:
-            wifi_tester.ap_stop()
+            esp32_tester.ap_stop()
             # DUT will eventually fall back to credentials.h and rejoin production
 
-    def test_wrong_ssid(self, wifi_tester, dut_production_url):
+    def test_wrong_ssid(self, esp32_tester, dut_production_url):
         """WIFI-301: DUT fails gracefully with nonexistent SSID."""
         # Provision DUT with SSID that doesn't exist
         from conftest import _provision_dut_wifi
@@ -45,10 +45,10 @@ class TestInvalidCredentials:
         from conftest import _wait_for_dut_on_production
         _wait_for_dut_on_production(dut_production_url, timeout=120)
 
-    def test_empty_password_for_wpa2(self, wifi_tester, dut_production_url):
+    def test_empty_password_for_wpa2(self, esp32_tester, dut_production_url):
         """WIFI-302: DUT fails auth when WPA2 AP gets empty password."""
         ssid = "WPA2-NET"
-        wifi_tester.ap_start(ssid, "real_password_123")
+        esp32_tester.ap_start(ssid, "real_password_123")
 
         try:
             from conftest import _provision_dut_wifi
@@ -56,15 +56,15 @@ class TestInvalidCredentials:
 
             # DUT should NOT connect (empty password for WPA2)
             with pytest.raises(Exception):
-                wifi_tester.wait_for_station(timeout=35)
+                esp32_tester.wait_for_station(timeout=35)
         finally:
-            wifi_tester.ap_stop()
+            esp32_tester.ap_stop()
 
-    def test_correct_creds_after_bad(self, wifi_tester, dut_production_url):
+    def test_correct_creds_after_bad(self, esp32_tester, dut_production_url):
         """WIFI-303: DUT connects after correcting bad credentials."""
         ssid = "RECOVERY-NET"
         password = "correct_pass_123"
-        wifi_tester.ap_start(ssid, password)
+        esp32_tester.ap_start(ssid, password)
 
         try:
             # First: provision with wrong password
@@ -82,13 +82,13 @@ class TestInvalidCredentials:
             _provision_dut_wifi(dut_production_url, ssid, password)
 
             # DUT should connect
-            station = wifi_tester.wait_for_station(timeout=45)
+            station = esp32_tester.wait_for_station(timeout=45)
             assert station["ip"].startswith("192.168.4.")
 
             # Restore to production
-            wifi_tester.http_post(
+            esp32_tester.http_post(
                 f"http://{station['ip']}/api/wifi",
                 json={"ssid": "", "password": ""},
             )
         finally:
-            wifi_tester.ap_stop()
+            esp32_tester.ap_stop()

@@ -1,7 +1,7 @@
 """WIFI-6xx: Network Services on Test AP.
 
 Verify DUT's HTTP services work correctly when accessed through
-the WiFi Tester's serial relay.
+the ESP32 Tester's serial relay.
 """
 
 import pytest

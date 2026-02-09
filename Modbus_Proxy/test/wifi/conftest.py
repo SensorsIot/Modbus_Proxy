@@ -1,15 +1,15 @@
 """Fixtures for Modbus Proxy WiFi integration tests.
 
-These fixtures use the WiFi Tester instrument (serial-controlled ESP32-C3 AP)
+These fixtures use the Universal ESP32 Tester instrument (serial-controlled ESP32-C3 AP)
 to automate WiFi connection, reconnection, and captive portal testing.
 
 Requires:
-    - WiFi Tester hardware connected via USB serial
+    - Universal ESP32 Tester hardware connected via USB serial
     - DUT (Modbus Proxy) powered and reachable on production network
-    - Environment variables: WIFI_TESTER_PORT, DUT_IP (optional, have defaults)
+    - Environment variables: ESP32_TESTER_PORT, DUT_IP (optional, have defaults)
 
 Install driver:
-    pip install -e <path-to-Wifi-Tester>/pytest
+    pip install -e <path-to-Universal-ESP32-Tester>/pytest
 """
 
 import json
@@ -20,11 +20,11 @@ import uuid
 import pytest
 import requests
 
-# Import will fail until wifi_tester_driver is installed from the Wifi-Tester repo
+# Import will fail until wifi_tester_driver is installed from the Universal-ESP32-Tester repo
 try:
-    from wifi_tester_driver import WiFiTesterDriver
+    from wifi_tester_driver import WiFiTesterDriver as ESP32TesterDriver
 except ImportError:
-    WiFiTesterDriver = None
+    ESP32TesterDriver = None
 
 
 # ---------------------------------------------------------------------------
@@ -44,25 +44,25 @@ FAILED_BOOT_CYCLE = WIFI_CONNECT_TIMEOUT + 5  # one failed boot cycle
 
 
 # ---------------------------------------------------------------------------
-# Session-scoped: WiFi Tester instrument
+# Session-scoped: Universal ESP32 Tester instrument
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="session")
-def wifi_tester():
-    """Session-scoped connection to the WiFi Tester instrument."""
-    if WiFiTesterDriver is None:
+def esp32_tester():
+    """Session-scoped connection to the Universal ESP32 Tester instrument."""
+    if ESP32TesterDriver is None:
         pytest.skip(
             "wifi_tester_driver not installed. "
-            "Install from Wifi-Tester repo: pip install -e <path>/pytest"
+            "Install from Universal-ESP32-Tester repo: pip install -e <path>/pytest"
         )
 
-    port = os.environ.get("WIFI_TESTER_PORT", "/dev/ttyACM0")
-    driver = WiFiTesterDriver(port)
+    port = os.environ.get("ESP32_TESTER_PORT", "/dev/ttyACM0")
+    driver = ESP32TesterDriver(port)
     driver.open()
 
     info = driver.ping()
-    print(f"WiFi Tester connected: {info}")
+    print(f"ESP32 Tester connected: {info}")
 
     yield driver
 
@@ -92,22 +92,22 @@ def dut_production_url(dut_production_ip):
 
 
 @pytest.fixture
-def wifi_network(wifi_tester):
+def wifi_network(esp32_tester):
     """Start a fresh test AP, stop on teardown. Yields network info dict."""
     ssid = f"TEST-{uuid.uuid4().hex[:6].upper()}"
     password = "testpass123"
-    wifi_tester.ap_start(ssid, password)
+    esp32_tester.ap_start(ssid, password)
     yield {"ssid": ssid, "password": password, "ap_ip": "192.168.4.1"}
-    wifi_tester.ap_stop()
+    esp32_tester.ap_stop()
 
 
 @pytest.fixture
-def open_wifi_network(wifi_tester):
+def open_wifi_network(esp32_tester):
     """Start an open (no password) test AP, stop on teardown."""
     ssid = f"OPEN-{uuid.uuid4().hex[:6].upper()}"
-    wifi_tester.ap_start(ssid, "")
+    esp32_tester.ap_start(ssid, "")
     yield {"ssid": ssid, "password": "", "ap_ip": "192.168.4.1"}
-    wifi_tester.ap_stop()
+    esp32_tester.ap_stop()
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +152,7 @@ def _wait_for_dut_on_production(dut_production_url, timeout=60):
 
 
 @pytest.fixture
-def dut_on_test_ap(wifi_tester, wifi_network, dut_production_url):
+def dut_on_test_ap(esp32_tester, wifi_network, dut_production_url):
     """Provision the DUT onto the test AP and wait for connection.
 
     Yields a dict with:
@@ -177,7 +177,7 @@ def dut_on_test_ap(wifi_tester, wifi_network, dut_production_url):
     )
 
     # Wait for DUT to connect to our AP
-    station = wifi_tester.wait_for_station(timeout=DUT_BOOT_TIME + WIFI_CONNECT_TIMEOUT)
+    station = esp32_tester.wait_for_station(timeout=DUT_BOOT_TIME + WIFI_CONNECT_TIMEOUT)
     dut_ip = station["ip"]
 
     yield {
@@ -188,7 +188,7 @@ def dut_on_test_ap(wifi_tester, wifi_network, dut_production_url):
 
     # Restore: tell DUT to go back to production network
     try:
-        wifi_tester.http_post(
+        esp32_tester.http_post(
             f"http://{dut_ip}/api/wifi",
             json={"ssid": original_ssid, "password": ""},
         )
@@ -209,10 +209,10 @@ def dut_on_test_ap(wifi_tester, wifi_network, dut_production_url):
 
 
 class DUTHttpClient:
-    """HTTP client that routes requests through the WiFi Tester serial relay."""
+    """HTTP client that routes requests through the ESP32 Tester serial relay."""
 
-    def __init__(self, wifi_tester, dut_ip):
-        self._tester = wifi_tester
+    def __init__(self, tester, dut_ip):
+        self._tester = tester
         self._dut_ip = dut_ip
 
     @property
@@ -227,9 +227,9 @@ class DUTHttpClient:
 
 
 @pytest.fixture
-def dut_http(wifi_tester, dut_on_test_ap):
-    """HTTP client for the DUT, routed through the WiFi Tester relay."""
-    return DUTHttpClient(wifi_tester, dut_on_test_ap["ip"])
+def dut_http(esp32_tester, dut_on_test_ap):
+    """HTTP client for the DUT, routed through the ESP32 Tester relay."""
+    return DUTHttpClient(esp32_tester, dut_on_test_ap["ip"])
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +238,7 @@ def dut_http(wifi_tester, dut_on_test_ap):
 
 
 @pytest.fixture
-def dut_in_portal_mode(wifi_tester, wifi_network, dut_production_url):
+def dut_in_portal_mode(esp32_tester, wifi_network, dut_production_url):
     """Trigger the DUT's captive portal mode by causing 3 failed WiFi boots.
 
     Prerequisites: DUT is currently on production network.
@@ -253,7 +253,7 @@ def dut_in_portal_mode(wifi_tester, wifi_network, dut_production_url):
     On teardown, waits for portal timeout or restores DUT via portal.
     """
     # Stop AP so DUT's WiFi will fail
-    wifi_tester.ap_stop()
+    esp32_tester.ap_stop()
 
     # Provision DUT with our SSID — DUT will reboot and fail
     _provision_dut_wifi(
@@ -269,7 +269,7 @@ def dut_in_portal_mode(wifi_tester, wifi_network, dut_production_url):
     time.sleep(wait_time)
 
     # Verify portal AP is broadcasting
-    scan_result = wifi_tester.scan()
+    scan_result = esp32_tester.scan()
     portal_found = any(
         n["ssid"] == PORTAL_SSID for n in scan_result.get("networks", [])
     )
@@ -284,12 +284,12 @@ def dut_in_portal_mode(wifi_tester, wifi_network, dut_production_url):
 
     # Teardown: provision DUT back to production via the portal
     try:
-        wifi_tester.sta_join(PORTAL_SSID, timeout=10)
-        wifi_tester.http_post(
+        esp32_tester.sta_join(PORTAL_SSID, timeout=10)
+        esp32_tester.http_post(
             f"http://{PORTAL_IP}/api/wifi",
             json={"ssid": "", "password": ""},  # empty = use credentials.h fallback
         )
-        wifi_tester.sta_leave()
+        esp32_tester.sta_leave()
     except Exception:
         pass
 

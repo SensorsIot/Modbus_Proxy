@@ -828,7 +828,7 @@ All tests run on an isolated artificial network hosted by the Serial Portal Pi (
 │  Serial Portal Pi (192.168.0.87)                                │
 │                                                                 │
 │  ┌──────────────────┐  ┌──────────────────┐  ┌───────────────┐ │
-│  │ WiFi Tester AP   │  │ Serial Portal    │  │ mosquitto     │ │
+│  │ ESP32 Tester AP   │  │ Serial Portal    │  │ mosquitto     │ │
 │  │ hostapd on wlan0 │  │ RFC2217 server   │  │ MQTT broker   │ │
 │  │ SSID: WiFi-Tester│  │ port 4001+       │  │ port 1883     │ │
 │  │ 192.168.4.1      │  │                  │  │ 192.168.4.1   │ │
@@ -850,18 +850,18 @@ All tests run on an isolated artificial network hosted by the Serial Portal Pi (
 | Version | mosquitto 2.0.21 |
 | Config file | `/etc/mosquitto/conf.d/test-broker.conf` |
 | Listen address | `0.0.0.0:1883` (all interfaces) |
-| Test network address | `192.168.4.1:1883` (via WiFi Tester AP) |
+| Test network address | `192.168.4.1:1883` (via ESP32 Tester AP) |
 | Authentication | Username `admin`, password `admin` (password file: `/etc/mosquitto/passwd`) |
 | Anonymous access | Allowed |
 | Auto-start | `systemctl enable mosquitto` (starts on boot) |
 | Manual restart | `ssh pi@192.168.0.87 sudo systemctl restart mosquitto` |
 
-The broker is accessible at `192.168.4.1:1883` from the test network (WiFi Tester AP subnet) and at `192.168.0.87:1883` from the home LAN. During testing the DUT connects via `192.168.4.1`, the same address as the WiFi Tester AP gateway.
+The broker is accessible at `192.168.4.1:1883` from the test network (ESP32 Tester AP subnet) and at `192.168.0.87:1883` from the home LAN. During testing the DUT connects via `192.168.4.1`, the same address as the ESP32 Tester AP gateway.
 
 **Test workflow** (see test spec for full details):
 1. DUT is flashed and NVS-erased via RFC2217 serial
 2. DUT boots, fails to connect to compiled fallback SSID (`private-2G`, not available on test network)
-3. Captive portal is triggered via GPIO, DUT is provisioned with WiFi Tester AP credentials
+3. Captive portal is triggered via GPIO, DUT is provisioned with ESP32 Tester AP credentials
 4. MQTT broker is configured to `192.168.4.1:1883` via `set_mqtt` command
 5. All MQTT tests (subscribe, publish, config commands, disconnect/reconnect) run against the Pi broker
 
@@ -916,7 +916,7 @@ See DTSU-666 datasheet for complete register definitions (2102-2181)
 ---
 
 **Document Version History**:
-- v5.6 (February 2026): Added test infrastructure section (17.4) documenting isolated artificial network with Pi-hosted mosquitto broker (192.168.4.1:1883); all tests run on WiFi Tester AP, no dependency on home network
+- v5.6 (February 2026): Added test infrastructure section (17.4) documenting isolated artificial network with Pi-hosted mosquitto broker (192.168.4.1:1883); all tests run on ESP32 Tester AP, no dependency on home network
 - v5.5 (February 2026): GPIO 2 button trigger replaces 3-power-cycle boot counter for captive portal activation; 60-second WiFi/MQTT recovery restart (no portal on failure); removed boot_count from NVS
 - v5.4 (February 2026): WPA2 captive portal (password "modbus-setup"), NVS bug fixes (`&=` bitwise AND with `putString()` return value, double-open in `initNVSConfig()`), boot count reset after portal WiFi save, captive portal tests passing
 - v5.3 (February 2026): RFC2217 serial flashing without buttons (plain RFC2217 server for C3 native USB), Serial Portal integration
