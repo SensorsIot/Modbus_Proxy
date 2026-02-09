@@ -4,10 +4,10 @@
 
 | Field | Value |
 |-------|-------|
-| Version | 1.8 |
+| Version | 2.1 |
 | Status | Draft |
 | Created | 2026-02-05 |
-| Related | Modbus-Proxy FSD v5.3 |
+| Related | Modbus-Proxy FSD v5.5 |
 
 ## 1. Overview
 
@@ -41,7 +41,7 @@ This document specifies test cases for the Modbus_Proxy firmware, which acts as 
 6. **NVS Storage**: Persistent configuration across reboots
 7. **Watchdog Protection**: Software + hardware watchdog for crash recovery
 8. **Web UI**: 3-page dashboard (Dashboard/Status/Setup) with REST API
-9. **Captive Portal**: WiFi provisioning via AP mode (3 power cycle trigger)
+9. **Captive Portal**: WiFi provisioning via AP mode (GPIO 2 button trigger)
 10. **mDNS**: Hostname advertisement (modbus-proxy.local)
 
 ### 1.3 Test Suite at a Glance
@@ -81,7 +81,7 @@ These tests verify the running device via external interfaces. **43 can be fully
 | **Standard Tests** (TC-100 to TC-110) | 11 | 11 | 0 | pytest, paho-mqtt, requests |
 | **Edge Cases** (EC-100 to EC-116) | 17 | 14 | 3 | pytest, paho-mqtt, requests, pyserial (RFC2217), WiFi Tester, SSH |
 | **Web UI** (WEB-100 to WEB-109) | 10 | 8 | 2 | pytest, requests |
-| **Captive Portal** (CP-100 to CP-103) | 4 | 4 | 0 | pytest, pyserial (RFC2217), WiFi Tester |
+| **Captive Portal** (CP-101 to CP-102) | 2 | 2 | 0 | pytest, pyserial (RFC2217), WiFi Tester |
 | **Long Duration** (LD-001 to LD-006) | 6 | 6 | 0 | pytest, paho-mqtt, requests |
 
 **Manual-only tests:** EC-113 / EC-114 / EC-115 (require test firmware with deliberate hang/allocation), WEB-101 (CSS color needs browser), WEB-109 (mDNS is OS-dependent).
@@ -113,7 +113,7 @@ The following services are **always-on infrastructure** — tests must NEVER sta
 
 The DUT always starts the test suite in a **well-defined clean state**:
 
-- **NVS is empty** — no saved WiFi credentials, no custom MQTT config, no debug mode, boot count = 0
+- **NVS is empty** — no saved WiFi credentials, no custom MQTT config, no debug mode
 - **WiFi credentials erased** — no NVS-stored SSID/password; device falls back to `credentials.h` (`private-2G`)
 - **Firmware is freshly flashed** — bootloader + partitions + application at correct offsets
 - **Device has just booted** — first boot after NVS erase, connected to fallback WiFi, MQTT using compiled defaults
@@ -123,14 +123,13 @@ This state is established by the test harness before any test runs (see Section 
 **How to reach the clean state:**
 
 ```bash
-# Erase NVS partition (0x9000, 20K) — wipes WiFi creds, MQTT config, boot counter, debug mode
+# Erase NVS partition (0x9000, 20K) — wipes WiFi creds, MQTT config, debug mode
 python3 esptool.py --port "rfc2217://192.168.0.87:4001" --chip esp32c3 \
     --baud 921600 erase_region 0x9000 0x5000
 
 # Device resets automatically after erase. On first boot with empty NVS:
 #   - WiFi: falls back to credentials.h (private-2G)
 #   - MQTT: uses compiled defaults (192.168.0.203:1883)
-#   - Boot count: 0
 #   - Debug mode: off
 ```
 
@@ -138,7 +137,7 @@ python3 esptool.py --port "rfc2217://192.168.0.87:4001" --chip esp32c3 \
 
 | Partition | Offset | Size | Notes |
 |-----------|--------|------|-------|
-| nvs | 0x9000 | 20K | WiFi creds, MQTT config, boot counter, debug flag |
+| nvs | 0x9000 | 20K | WiFi creds, MQTT config, debug flag |
 | otadata | 0xE000 | 8K | OTA boot selection |
 | app0 | 0x10000 | 1280K | Primary application |
 | app1 | 0x150000 | 1280K | OTA update slot |
@@ -236,7 +235,10 @@ These run first, in order, to establish and verify the clean DUT state before an
 
 #### 3.0.1 TC-000: Flash Firmware and Erase NVS
 
-**Precondition:** Firmware built with `esp32-c3-debug` environment (`SERIAL_DEBUG_LEVEL=2`). This ensures maximum serial output for observing boot behaviour.
+**Precondition:**
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
+- Build artifacts exist: `bootloader.bin`, `partitions.bin`, `firmware.bin` in `.pio/build/esp32-c3-debug/`
+- Firmware built with `esp32-c3-debug` environment (`SERIAL_DEBUG_LEVEL=2`)
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -272,6 +274,11 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 #### 3.0.2 TC-001: Verify Clean State
 
+**Precondition:**
+- TC-000 passed (firmware flashed, NVS erased)
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT broker running at 192.168.0.203:1883
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Wait for DUT to boot (max 15s) | DUT connects to fallback WiFi (`private-2G`) |
@@ -295,6 +302,10 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 #### 3.1.1 TC-100: Basic Startup
 
+**Precondition:**
+- TC-000 passed (firmware flashed, NVS erased)
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Power on ESP32-C3 | Boot sequence starts |
@@ -308,6 +319,10 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 **Automation:** pytest, requests, paho-mqtt. Verify /api/status uptime > 0, subscribe to MBUS-PROXY/health.
 
 ### 3.2 TC-101: Wallbox Power via MQTT (Plain Float)
+
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -323,6 +338,10 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 ### 3.3 TC-102: Wallbox Power via MQTT (JSON power key)
 
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Publish `{"power": 5000.0}` to `wallbox` | Message received |
@@ -333,6 +352,10 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 **Automation:** pytest, paho-mqtt. Publish {"power":5000}, verify via MBUS-PROXY/power or /api/status.
 
 ### 3.4 TC-103: Wallbox Power via MQTT (JSON chargePower key)
+
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -345,6 +368,10 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 ### 3.5 TC-104: Config Command - get_config
 
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Publish `{"cmd": "get_config"}` to `MBUS-PROXY/cmd/config` | Command received |
@@ -356,6 +383,11 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 **Automation:** pytest, paho-mqtt. Publish get_config, subscribe to response topic, validate JSON fields.
 
 ### 3.6 TC-105: Config Command - set_wallbox_topic
+
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
+- Current wallbox topic known: `get_config` → `wallbox_topic`
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -370,6 +402,10 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 ### 3.7 TC-106: Config Command - set_log_level
 
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Publish `{"cmd": "set_log_level", "level": 0}` | Set to DEBUG |
@@ -383,6 +419,11 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 ### 3.8 TC-107: Config Command - set_mqtt
 
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
+- Current MQTT config known: `get_config` → `mqtt_host`, `mqtt_port`
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Publish `{"cmd": "set_mqtt", "host": "192.168.0.100", "port": 1883}` | Command received |
@@ -395,6 +436,10 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 **Automation:** pytest, paho-mqtt, requests. Publish set_mqtt, verify reconnect via /api/status mqtt_reconnects.
 
 ### 3.9 TC-108: Config Command - factory_reset
+
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -410,6 +455,11 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 ### 3.10 TC-109: Power Correction Threshold
 
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
+- No active wallbox data: `/api/status` → `correction_active: false`
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Publish wallbox power: 500W | Below threshold (1000W) |
@@ -422,6 +472,10 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 **Automation:** pytest, paho-mqtt. Publish below/above threshold values, check MBUS-PROXY/power active flag.
 
 ### 3.11 TC-110: Wallbox Data Staleness
+
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -437,6 +491,11 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 ## 4. Edge Case Tests
 
 ### 4.1 EC-100: MQTT Disconnect During Operation
+
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
+- MQTT broker accessible via SSH: `ssh broker-host "systemctl is-active mosquitto"` → `active`
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -454,6 +513,11 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 ### 4.2 EC-101: WiFi Disconnect During Operation
 
+**Precondition:**
+- WiFi Tester AP running: `wt.ap_status()["active"] == True`
+- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
+- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200 OK
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | System running normally | WiFi + MQTT connected |
@@ -469,6 +533,11 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 ### 4.3 EC-102: Malformed Wallbox Power Message
 
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
+- Baseline error count: record `/api/status` → `wallbox_errors`
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Publish `not_a_number` to wallbox topic | Invalid format |
@@ -482,6 +551,10 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 **Automation:** pytest, paho-mqtt, requests. Publish "not_a_number", verify wallbox_errors incremented via /api/status.
 
 ### 4.4 EC-103: Malformed Config Command
+
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -498,6 +571,11 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 ### 4.5 EC-104: Oversized MQTT Message
 
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
+- Baseline error count: record `/api/status` → `wallbox_errors`
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Publish 300-byte wallbox message | Above 256 limit |
@@ -512,6 +590,11 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 ### 4.6 EC-105: Rapid Wallbox Power Updates
 
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
+- Baseline heap: record `/api/status` → `free_heap`
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Publish 20 power values in 2 seconds | High message rate |
@@ -524,6 +607,11 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 **Automation:** pytest, paho-mqtt, requests. Burst 20 messages in 2s, verify last value and heap stability via /api/status.
 
 ### 4.7 EC-106: Power Cycle Recovery
+
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"` (for DTR reset)
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -539,6 +627,11 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 ### 4.8 EC-107: OTA Update
 
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- Firmware binary exists: `.pio/build/esp32-c3-release/firmware.bin`
+- OTA endpoint alive: `GET /ota/health` → 200 OK (if available)
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Build new firmware | Different version |
@@ -552,6 +645,10 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 **Automation:** pytest, requests. POST firmware.bin to /ota with auth header, verify new fw_version via /api/status.
 
 ### 4.9 EC-108: Concurrent MQTT Publish and Subscribe
+
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -567,6 +664,11 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 ### 4.10 EC-109: MQTT Reconnect with Config Change
 
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
+- Baseline reconnects: record `/api/status` → `mqtt_reconnects`
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Change MQTT host to invalid IP | set_mqtt command |
@@ -580,6 +682,11 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 **Automation:** pytest, paho-mqtt, requests. Send set_mqtt with invalid host, verify via /api/status, send valid host, verify recovery.
 
 ### 4.11 EC-110: Log Buffer Overflow
+
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
+- MQTT broker accessible via SSH: `ssh broker-host "systemctl is-active mosquitto"` → `active`
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -595,6 +702,11 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 ### 4.12 EC-111: Empty Wallbox Topic Message
 
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
+- Baseline error count: record `/api/status` → `wallbox_errors`
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Publish empty message to wallbox | Zero-length payload |
@@ -607,6 +719,10 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 **Automation:** pytest, paho-mqtt, requests. Publish empty message, verify wallbox_errors incremented via /api/status.
 
 ### 4.13 EC-112: Special Characters in Config
+
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -621,6 +737,10 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 **Automation:** pytest, paho-mqtt. Set topic with "/" chars via set_wallbox_topic, publish to new topic, verify received.
 
 ### 4.14 EC-113: Software Watchdog - Task Timeout Detection
+
+**Precondition:**
+- Test firmware with deliberate task hang capability flashed
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"` (for serial monitoring)
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -640,6 +760,10 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 ### 4.15 EC-114: Hardware Watchdog - Watchdog Task Recovery
 
+**Precondition:**
+- Test firmware or code review — hardware WDT cannot be triggered externally
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"` (for serial monitoring)
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | System running normally | Hardware WDT active |
@@ -656,6 +780,10 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 ### 4.16 EC-115: Critical Memory Watchdog
 
+**Precondition:**
+- Test firmware with deliberate memory allocation capability flashed
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"` (for serial monitoring)
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | System running normally | Heap > MIN_FREE_HEAP |
@@ -671,6 +799,12 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 **Automation:** Manual — requires test firmware with deliberate memory allocation to exhaust heap. Cannot be triggered via external interfaces.
 
 ### 4.17 EC-116: Watchdog Survives MQTT Disconnect
+
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
+- Baseline uptime: record `/api/status` → `uptime`
+- MQTT broker accessible via SSH: `ssh broker-host "systemctl is-active mosquitto"` → `active`
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -690,6 +824,9 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 ### 5.1 WEB-100: Dashboard Page Loads
 
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Open http://{device-ip}/ in browser | Dashboard page loads |
@@ -705,6 +842,11 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 ### 5.2 WEB-101: Dashboard Power Color Coding
 
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
+- Browser available for visual CSS inspection
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Set wallbox power to 0W | Wallbox value displays cyan |
@@ -716,6 +858,9 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 **Automation:** Manual — CSS color verification requires visual browser inspection. Can partially verify CSS class names via requests.
 
 ### 5.3 WEB-102: Status Page System Info
+
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -732,6 +877,10 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 ### 5.4 WEB-103: Setup Page - Debug Toggle
 
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- Debug mode off: `/api/status` → `debug_mode: false`
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Navigate to /setup | Setup page loads |
@@ -745,6 +894,11 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 **Automation:** pytest, requests. POST /api/debug, verify via GET /api/status debug_mode field, toggle back.
 
 ### 5.5 WEB-104: Setup Page - MQTT Configuration
+
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
+- Current MQTT config known: `GET /api/config` → `mqtt_host`, `mqtt_port`
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -761,6 +915,10 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 ### 5.6 WEB-105: Setup Page - Wallbox Topic
 
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Navigate to /setup | Current wallbox topic shown |
@@ -773,6 +931,10 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 **Automation:** pytest, requests, paho-mqtt. POST /api/config wallbox topic, verify MQTT subscription updated.
 
 ### 5.7 WEB-106: Setup Page - Factory Reset
+
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- Non-default config set (e.g., custom MQTT host or wallbox topic)
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -788,6 +950,9 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 ### 5.8 WEB-107: REST API /api/status
 
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | GET /api/status | 200 OK, JSON response |
@@ -799,6 +964,10 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 **Automation:** pytest, requests. GET /api/status, validate all documented fields present with correct JSON types.
 
 ### 5.9 WEB-108: Restart via Web UI
+
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- Baseline uptime: record `/api/status` → `uptime`
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -812,6 +981,10 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 ### 5.10 WEB-109: mDNS Hostname
 
+**Precondition:**
+- DUT reachable via IP: `GET http://192.168.0.177/api/status` → 200 OK
+- mDNS client available on test machine
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Device connected to WiFi | mDNS started |
@@ -822,21 +995,12 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Automation:** Manual — mDNS resolution is OS/network dependent; not reliably automatable across platforms.
 
-### 5.11 CP-100: Captive Portal Activation (3 Power Cycles)
+### 5.11 CP-101: Captive Portal WiFi Configuration
 
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Power cycle device 3 times rapidly | Boot count increments each time |
-| 2 | On 3rd boot | "CAPTIVE PORTAL MODE TRIGGERED" in serial |
-| 3 | Check WiFi | AP mode: SSID "MODBUS-Proxy-Setup" |
-| 4 | Connect phone/laptop to AP | Auto-redirect to portal page |
-| 5 | Portal page displays | WiFi scan and password entry |
-
-**Pass Criteria**: 3 rapid reboots triggers AP mode with captive portal.
-
-**Automation:** pytest, pyserial (RFC2217), WiFi Tester. Three serial DTR resets via rfc2217://192.168.0.87:4003, WiFi Tester scans for "MODBUS-Proxy-Setup" AP, joins it, verifies portal page at 192.168.4.1.
-
-### 5.12 CP-101: Captive Portal WiFi Configuration
+**Precondition:**
+- DUT in captive portal mode: `wt.scan()` shows `MODBUS-Proxy-Setup` SSID
+- WiFi Tester available: `wt.get_mode()` responds
+- Portal AP joinable: `wt.sta_join("MODBUS-Proxy-Setup", "modbus-setup")` succeeds
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -845,13 +1009,16 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 | 3 | Select network, enter password | Fill form |
 | 4 | Click Save | POST /api/wifi saves credentials |
 | 5 | Device restarts | Connects to configured network |
-| 6 | Boot count resets | Normal operation |
 
 **Pass Criteria**: WiFi credentials saved via portal, device connects on restart.
 
 **Automation:** pytest, WiFi Tester (HTTP relay). In portal mode: GET /api/scan, POST /api/wifi with test AP credentials via relay, verify DUT joins new AP.
 
-### 5.13 CP-102: Captive Portal Timeout
+### 5.12 CP-102: Captive Portal Timeout
+
+**Precondition:**
+- DUT in captive portal mode: `wt.scan()` shows `MODBUS-Proxy-Setup` SSID
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"` (for serial monitoring)
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -861,34 +1028,123 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Pass Criteria**: Portal doesn't run indefinitely; 5-minute timeout triggers restart.
 
-**Automation:** pytest, pyserial (RFC2217), WiFi Tester. Trigger portal via 3 resets, wait 5+ minutes, verify DUT restarts (AP disappears, STA reconnects).
-
-### 5.14 CP-103: Boot Counter Reset on Success
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | Power cycle once | Boot count = 1 |
-| 2 | WiFi connects successfully | Boot count reset to 0 |
-| 3 | Power cycle once more | Boot count = 1 (not 2) |
-
-**Pass Criteria**: Successful WiFi connection resets boot counter, preventing accidental portal activation.
-
-**Automation:** pytest, pyserial (RFC2217), requests. Single DTR reset, verify WiFi connects, reset again, verify boot count = 1 (not 2) via /api/status.
+**Automation:** pytest, pyserial (RFC2217), WiFi Tester. Trigger portal via GPIO 2 button, wait 5+ minutes, verify DUT restarts (AP disappears, STA reconnects).
 
 ---
 
 ## 6. Long-Duration Tests
 
-| Test ID | Duration | Description | Pass Criteria |
-|---------|----------|-------------|---------------|
-| LD-001 | 24 hours | Continuous Modbus proxy | No memory leaks, stable heap |
-| LD-002 | 24 hours | MQTT publish every second | No disconnects, no queue overflow |
-| LD-003 | 72 hours | Idle with health reports | No watchdog resets |
-| LD-004 | 7 days | Normal usage pattern | < 1 unexpected reset |
-| LD-005 | 24 hours | Watchdog stability | No false watchdog triggers, heap stable |
-| LD-006 | 48 hours | Repeated WiFi/MQTT disconnects | Watchdog does not trigger during normal reconnects |
+### 6.1 LD-001: Continuous Modbus Proxy (24h)
 
-**Automation (all LD tests):** pytest, paho-mqtt, requests. Long-running scripts with periodic /api/status polling (free_heap, uptime, mqtt_reconnects). LD-001/LD-002: subscribe to MBUS-PROXY/power or /health, verify steady heap. LD-003/LD-005: monitor /api/status uptime (no unexpected resets). LD-004: periodic health checks over 7 days. LD-006: subprocess (SSH) to cycle mosquitto stop/start, WiFi Tester for AP dropout cycles.
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
+- Baseline heap: record `/api/status` → `free_heap`, `min_free_heap`
+- Baseline uptime: record `/api/status` → `uptime`
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Start 24h monitoring script | Polls `/api/status` every 60s |
+| 2 | Record `free_heap` and `min_free_heap` each poll | Values logged |
+| 3 | After 24h, compare heap trend | `free_heap` drift < 1KB from baseline |
+| 4 | Check `uptime` | Continuously increasing (no resets) |
+
+**Pass Criteria**: No memory leaks, stable heap, no unexpected resets over 24 hours.
+
+**Automation:** pytest, requests. Long-running script polling `/api/status` every 60s, asserting heap stability and uptime continuity.
+
+### 6.2 LD-002: MQTT Publish Every Second (24h)
+
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
+- Baseline: record `/api/status` → `mqtt_reconnects`
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Publish wallbox power to `wallbox` topic every 1s | Sustained 1 msg/s |
+| 2 | Subscribe to `MBUS-PROXY/power` | Verify messages arrive |
+| 3 | After 24h, check `mqtt_reconnects` | 0 unexpected disconnects |
+| 4 | Check queue/heap | No overflow, stable memory |
+
+**Pass Criteria**: No MQTT disconnects, no queue overflow, stable heap over 24 hours.
+
+**Automation:** pytest, paho-mqtt, requests. Publisher thread at 1 msg/s, subscriber verifies delivery, periodic `/api/status` heap check.
+
+### 6.3 LD-003: Idle with Health Reports (72h)
+
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
+- Baseline uptime: record `/api/status` → `uptime`
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Leave DUT idle for 72h | No external traffic |
+| 2 | Subscribe to `MBUS-PROXY/health` | Health reports arrive periodically |
+| 3 | Poll `/api/status` every 5 min | Uptime continuously increasing |
+| 4 | After 72h, check for resets | `uptime` > 259200 (72h in seconds) |
+
+**Pass Criteria**: No watchdog resets, continuous operation for 72 hours.
+
+**Automation:** pytest, paho-mqtt, requests. Subscribe to health topic, periodic `/api/status` polling, assert uptime continuity.
+
+### 6.4 LD-004: Normal Usage Pattern (7d)
+
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
+- Baseline uptime: record `/api/status` → `uptime`
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Simulate normal usage: periodic wallbox power, config queries | Mixed traffic |
+| 2 | Poll `/api/status` every 15 min for 7 days | All checks pass |
+| 3 | After 7d, count resets | `< 1 unexpected reset` |
+| 4 | Final heap check | Stable, no persistent leak |
+
+**Pass Criteria**: < 1 unexpected reset over 7 days of normal operation.
+
+**Automation:** pytest, paho-mqtt, requests. Mixed traffic script with periodic health checks over 7 days.
+
+### 6.5 LD-005: Watchdog Stability (24h)
+
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
+- Baseline uptime: record `/api/status` → `uptime`
+- Baseline heap: record `/api/status` → `free_heap`
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Run 24h with normal traffic | Watchdog task running |
+| 2 | Subscribe to `MBUS-PROXY/health` | Health reports arrive every 5s |
+| 3 | Monitor for watchdog trigger messages | None expected |
+| 4 | After 24h, check `uptime` | Continuously increasing |
+| 5 | Check heap stability | `free_heap` drift < 1KB |
+
+**Pass Criteria**: No false watchdog triggers, heap stable over 24 hours.
+
+**Automation:** pytest, paho-mqtt, requests. Subscribe to health/log topics, alert on watchdog messages, periodic heap polling.
+
+### 6.6 LD-006: Repeated WiFi/MQTT Disconnects (48h)
+
+**Precondition:**
+- DUT reachable: `GET /api/status` → 200 OK
+- MQTT connected: `/api/status` → `mqtt_connected: true`
+- MQTT broker accessible via SSH: `ssh broker-host "systemctl is-active mosquitto"` → `active`
+- Baseline uptime: record `/api/status` → `uptime`
+
+| Step | Action | Expected Result |
+|------|--------|-----------------|
+| 1 | Cycle MQTT broker stop/start every 30 min for 48h | Repeated disconnects |
+| 2 | After each restart, verify MQTT reconnects | `mqtt_connected: true` within 30s |
+| 3 | Monitor for watchdog triggers | None expected during normal reconnect |
+| 4 | After 48h, check `uptime` | Continuously increasing (no resets) |
+
+**Pass Criteria**: Watchdog does not trigger during normal reconnect cycles over 48 hours.
+
+**Automation:** pytest, paho-mqtt, requests, subprocess (SSH). Script cycles mosquitto stop/start, verifies reconnection, monitors for unexpected reboots.
 
 ## 7. Test Commands Reference
 
@@ -1074,6 +1330,12 @@ pytest test/wifi/ -v -m captive_portal
 
 ### 10.1 WiFi Connection Tests (WIFI-1xx)
 
+**Precondition (all WIFI-1xx):**
+- WiFi Tester reachable: `wt.get_mode()` responds
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
+- DUT NVS erased (no stored WiFi credentials)
+- WiFi Tester AP stopped: `wt.ap_status()["active"] == False` (test controls AP start)
+
 | ID | Test | What it proves |
 |----|------|---------------|
 | WIFI-100 | Connect to test AP | DUT connects and reports correct SSID |
@@ -1083,9 +1345,15 @@ pytest test/wifi/ -v -m captive_portal
 | WIFI-104 | REST API accessible | /api/status returns valid JSON |
 | WIFI-105 | Connect with WPA2 | DUT handles WPA2 authentication |
 | WIFI-106 | Connect to open network | DUT connects without password |
-| WIFI-107 | Boot counter resets on success | Single reboot doesn't trigger captive portal |
 
 ### 10.2 AP Dropout and Reconnection (WIFI-2xx)
+
+**Precondition (all WIFI-2xx):**
+- WiFi Tester AP running: `wt.ap_status()["active"] == True`
+- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
+- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200 OK
+- Baseline uptime: record DUT `/api/status` → `uptime` (via relay)
+- Baseline heap: record DUT `/api/status` → `free_heap` (via relay, for WIFI-205)
 
 | ID | Test | What it proves |
 |----|------|---------------|
@@ -1098,6 +1366,11 @@ pytest test/wifi/ -v -m captive_portal
 
 ### 10.3 Invalid Credentials (WIFI-3xx)
 
+**Precondition (all WIFI-3xx):**
+- WiFi Tester reachable: `wt.get_mode()` responds
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"` (for serial monitoring)
+- WiFi Tester AP running with known credentials: `wt.ap_status()["active"] == True`
+
 | ID | Test | What it proves |
 |----|------|---------------|
 | WIFI-300 | Wrong password | DUT fails gracefully, doesn't crash |
@@ -1107,17 +1380,32 @@ pytest test/wifi/ -v -m captive_portal
 
 ### 10.4 Captive Portal (WIFI-4xx)
 
+**Precondition (WIFI-401 to WIFI-405):**
+- DUT in captive portal mode: `wt.scan()` shows `MODBUS-Proxy-Setup` SSID
+- WiFi Tester can join portal AP: `wt.sta_join("MODBUS-Proxy-Setup", "modbus-setup")` succeeds
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"` (for serial monitoring)
+- Note: entering portal mode requires `wt.human_interaction()` for GPIO 2 button
+
+**Precondition (WIFI-406):**
+- DUT NOT in portal mode (normal boot, GPIO 2 not pressed)
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"`
+
 | ID | Test | What it proves |
 |----|------|---------------|
-| WIFI-400 | Portal activates after 3 failed boots | Boot counter triggers AP mode correctly |
 | WIFI-401 | Portal page accessible | Portal HTML served on 192.168.4.1 |
 | WIFI-402 | WiFi scan endpoint in portal | /api/scan returns network list |
 | WIFI-403 | Full provisioning flow | Portal → submit creds → DUT connects to new AP |
 | WIFI-404 | Portal DNS redirect | Captive portal detection URLs redirect |
 | WIFI-405 | Portal timeout (5 min) | Portal auto-restarts after timeout |
-| WIFI-406 | Normal boot no portal | Single reboot doesn't trigger portal |
+| WIFI-406 | Normal boot no portal | Reboot without GPIO 2 button doesn't trigger portal |
 
 ### 10.5 Credential Management (WIFI-5xx)
+
+**Precondition (all WIFI-5xx):**
+- WiFi Tester AP running: `wt.ap_status()["active"] == True`
+- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
+- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"` (for reset/NVS operations)
+- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200 OK
 
 | ID | Test | What it proves |
 |----|------|---------------|
@@ -1130,12 +1418,170 @@ pytest test/wifi/ -v -m captive_portal
 
 ### 10.6 Network Services on Test AP (WIFI-6xx)
 
+**Precondition (all WIFI-6xx):**
+- WiFi Tester AP running: `wt.ap_status()["active"] == True`
+- DUT connected to test AP: `wt.ap_status()["stations"]` contains DUT MAC
+- DUT reachable via relay: `wt.http_get("http://<DUT_IP>/api/status")` → 200 OK
+
 | ID | Test | What it proves |
 |----|------|---------------|
 | WIFI-600 | Full REST API via relay | All key endpoints work through serial proxy |
 | WIFI-601 | OTA health check | /ota/health responds via relay |
 | WIFI-602 | RSSI reported correctly | RSSI is plausible negative value |
 | WIFI-603 | wifi_ssid matches test AP | Reported SSID matches configured AP |
+
+---
+
+## Appendix A: Test Classification and Execution Sequence
+
+Tests are classified by their infrastructure requirement and executed in three phases. Within each phase, tests run in the order listed.
+
+### Classification Criteria
+
+| Category | DUT Network | Human Needed | Infrastructure |
+|----------|-------------|--------------|----------------|
+| **Manual** | Varies | Yes — GPIO 2 button, visual inspection, or special firmware | Serial Portal, WiFi Tester (for portal tests) |
+| **Artificial SSID** | WiFi Tester AP (192.168.4.x) | No | Serial Portal, WiFi Tester AP |
+| **Home Network** | private-2G (192.168.0.x) | No | MQTT broker, Serial Portal |
+
+### Phase 1: Manual Tests (8 tests)
+
+Tests requiring human physical action: GPIO 2 button press, visual browser inspection, or special test firmware.
+
+| # | Test ID | Name | Manual Action |
+|---|---------|------|---------------|
+| 1 | CP-108¹ | Enter Portal Mode via GPIO 2 Button | Hold GPIO 2 during boot |
+| 2 | CP-101 | Captive Portal WiFi Configuration | Hold GPIO 2 during boot |
+| 3 | CP-102 | Captive Portal Timeout | Hold GPIO 2 during boot |
+| 4 | WEB-101 | Dashboard Power Color Coding | Visual CSS color check in browser |
+| 5 | WEB-109 | mDNS Hostname | Browse to modbus-proxy.local |
+| 6 | EC-113 | Software Watchdog - Task Timeout | Flash test firmware with deliberate hang |
+| 7 | EC-114 | Hardware Watchdog | Flash test firmware / code review |
+| 8 | EC-115 | Critical Memory Watchdog | Flash test firmware with memory exhaust |
+
+¹ CP-108 is not in section 5 but documents the GPIO 2 procedure used as precondition for CP-101 and CP-102.
+
+**Precondition:** DUT flashed with esp32-c3-debug firmware (TC-000). NVS erased.
+
+**Restore after Phase 1:** Erase NVS and reset DUT to return to private-2G for Phase 3. Or provision DUT onto WiFi Tester AP for Phase 2.
+
+### Phase 2: Artificial SSID Tests (34 tests)
+
+DUT connects to WiFi Tester AP (isolated network, no internet). All HTTP access via WiFi Tester relay. No human intervention.
+
+| # | Test ID | Name |
+|---|---------|------|
+| 1 | WIFI-100 | Connect to test AP |
+| 2 | WIFI-101 | DHCP address assigned |
+| 3 | WIFI-102 | mDNS resolves on test network |
+| 4 | WIFI-103 | Web dashboard accessible |
+| 5 | WIFI-104 | REST API accessible |
+| 6 | WIFI-105 | Connect with WPA2 |
+| 7 | WIFI-106 | Connect to open network |
+| 8 | WIFI-200 | Reconnect after 5s AP dropout |
+| 9 | WIFI-201 | Brief 2s dropout, no reboot |
+| 10 | WIFI-202 | Extended 90s dropout |
+| 11 | WIFI-203 | AP SSID changes |
+| 12 | WIFI-204 | AP password changes |
+| 13 | WIFI-205 | 5 dropout cycles, heap stable |
+| 14 | WIFI-300 | Wrong password |
+| 15 | WIFI-301 | Wrong SSID |
+| 16 | WIFI-302 | Empty password for WPA2 AP |
+| 17 | WIFI-303 | Correct creds after bad |
+| 18 | WIFI-401 | Portal page accessible |
+| 19 | WIFI-402 | WiFi scan endpoint in portal |
+| 20 | WIFI-403 | Full provisioning flow |
+| 21 | WIFI-404 | Portal DNS redirect |
+| 22 | WIFI-405 | Portal timeout (5 min) |
+| 23 | WIFI-406 | Normal boot no portal |
+| 24 | WIFI-500 | NVS credentials persist |
+| 25 | WIFI-501 | NVS priority over fallback |
+| 26 | WIFI-502 | POST /api/wifi saves and reboots |
+| 27 | WIFI-503 | Factory reset clears WiFi |
+| 28 | WIFI-504 | Long SSID (32 chars) |
+| 29 | WIFI-505 | Special characters in password |
+| 30 | WIFI-600 | Full REST API via relay |
+| 31 | WIFI-601 | OTA health check |
+| 32 | WIFI-602 | RSSI reported correctly |
+| 33 | WIFI-603 | wifi_ssid matches test AP |
+| 34 | EC-101 | WiFi Disconnect During Operation |
+
+**Precondition:** WiFi Tester AP running. DUT provisioned with test AP credentials.
+
+**Note:** WIFI-401 to WIFI-406 require captive portal mode (GPIO 2 button). When running in Phase 2 (automated), use `wt.human_interaction()` to request the operator hold GPIO 2 before the serial reset.
+
+**Restore after Phase 2:** Erase NVS to return DUT to private-2G for Phase 3.
+
+### Phase 3: Home Network Tests (46 tests)
+
+DUT on private-2G (192.168.0.177), MQTT broker at 192.168.0.203. No WiFi Tester needed. No human intervention.
+
+| # | Test ID | Name |
+|---|---------|------|
+| | **Setup** | |
+| 1 | TC-000 | Flash Firmware and Erase NVS |
+| 2 | TC-001 | Verify Clean State |
+| | **Standard** | |
+| 3 | TC-100 | Basic Startup |
+| 4 | TC-101 | Wallbox Power via MQTT (Plain Float) |
+| 5 | TC-102 | Wallbox Power via MQTT (JSON power key) |
+| 6 | TC-103 | Wallbox Power via MQTT (JSON chargePower key) |
+| 7 | TC-104 | Config Command - get_config |
+| 8 | TC-105 | Config Command - set_wallbox_topic |
+| 9 | TC-106 | Config Command - set_log_level |
+| 10 | TC-107 | Config Command - set_mqtt |
+| 11 | TC-108 | Config Command - factory_reset |
+| 12 | TC-109 | Power Correction Threshold |
+| 13 | TC-110 | Wallbox Data Staleness |
+| | **Edge Cases** | |
+| 14 | EC-100 | MQTT Disconnect During Operation |
+| 15 | EC-102 | Malformed Wallbox Power Message |
+| 16 | EC-103 | Malformed Config Command |
+| 17 | EC-104 | Oversized MQTT Message |
+| 18 | EC-105 | Rapid Wallbox Power Updates |
+| 19 | EC-106 | Power Cycle Recovery |
+| 20 | EC-107 | OTA Update |
+| 21 | EC-108 | Concurrent MQTT Publish and Subscribe |
+| 22 | EC-109 | MQTT Reconnect with Config Change |
+| 23 | EC-110 | Log Buffer Overflow |
+| 24 | EC-111 | Empty Wallbox Topic Message |
+| 25 | EC-112 | Special Characters in Config |
+| 26 | EC-116 | Watchdog Survives MQTT Disconnect |
+| | **Web UI** | |
+| 27 | WEB-100 | Dashboard Page Loads |
+| 28 | WEB-102 | Status Page System Info |
+| 29 | WEB-103 | Setup Page - Debug Toggle |
+| 30 | WEB-104 | Setup Page - MQTT Configuration |
+| 31 | WEB-105 | Setup Page - Wallbox Topic |
+| 32 | WEB-106 | Setup Page - Factory Reset |
+| 33 | WEB-107 | REST API /api/status |
+| 34 | WEB-108 | Restart via Web UI |
+**Precondition:** DUT on private-2G with NVS erased (clean state). MQTT broker running.
+
+### Phase 4: Long Duration Tests (6 tests)
+
+Extended stability tests. Run after all functional tests pass. DUT on private-2G with MQTT broker.
+
+| # | Test ID | Name | Duration |
+|---|---------|------|----------|
+| 1 | LD-001 | Continuous Modbus proxy | 24h |
+| 2 | LD-002 | MQTT publish every second | 24h |
+| 3 | LD-003 | Idle with health reports | 72h |
+| 4 | LD-004 | Normal usage pattern | 7d |
+| 5 | LD-005 | Watchdog stability | 24h |
+| 6 | LD-006 | Repeated WiFi/MQTT disconnects | 48h |
+
+**Precondition:** All Phase 1–3 tests passed. DUT on private-2G. MQTT broker running.
+
+### Summary
+
+| Phase | Category | Tests | Human | WiFi Tester | MQTT Broker |
+|-------|----------|------:|:-----:|:-----------:|:-----------:|
+| 1 | Manual | 8 | Yes | Some | No |
+| 2 | Artificial SSID | 34 | GPIO 2 for WIFI-4xx | Yes | No |
+| 3 | Home Network | 34 | No | No | Yes |
+| 4 | Long Duration | 6 | No | No | Yes |
+| | **Total** | **82** | | | |
 
 ---
 
@@ -1152,3 +1598,6 @@ pytest test/wifi/ -v -m captive_portal
 | 1.6 | 2026-02-06 | Added WiFi integration tests (Section 10, WIFI-1xx to WIFI-6xx) using WiFi Tester instrument |
 | 1.7 | 2026-02-07 | Added automation tools to all verification tests (Sections 3–6), updated hardware/tools for Serial Portal and WiFi Tester, corrected test count (48 not 47) |
 | 1.8 | 2026-02-07 | Simplified serial debug to 3 levels (OFF/INFO/DEBUG), renamed build envs to esp32-c3-debug/release/production/unit-test, updated TC-000 to use debug build with serial verification |
+| 1.9 | 2026-02-08 | FW v1.2.0: GPIO 2 button replaces boot counter — removed CP-100, CP-103, WIFI-107, WIFI-400; updated boot counter references throughout |
+| 2.0 | 2026-02-09 | Added Appendix A: test classification (Manual / Artificial SSID / Home Network) and execution sequence |
+| 2.1 | 2026-02-09 | Added machine-checkable preconditions to all 82 test cases; expanded LD tests into individual subsections |
