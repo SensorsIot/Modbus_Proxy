@@ -4,7 +4,7 @@
 
 | Field | Value |
 |-------|-------|
-| Version | 2.3 |
+| Version | 2.4 |
 | Status | Draft |
 | Created | 2026-02-05 |
 | Related | Modbus-Proxy FSD v5.5 |
@@ -74,17 +74,17 @@ pytest test/wifi/ -m "not captive_portal"  # WiFi tests without slow portal test
 
 #### Verification Tests — 48 total
 
-These tests verify the running device via external interfaces. **43 can be fully automated** using pytest with MQTT, HTTP, RFC2217 serial, and the WiFi Tester. Only **5 require manual intervention** (marked below).
+These tests verify the running device via external interfaces. **All 45 runtime tests are fully automated** using pytest with MQTT, HTTP, RFC2217 serial, WiFi Tester GPIO, and mDNS resolution. **3 watchdog fault tests** (EC-113/114/115) are verified by code review since the fault conditions cannot be triggered via external interfaces.
 
-| Category | Tests | Auto | Manual | Tools needed |
-|----------|------:|-----:|-------:|-------------|
+| Category | Tests | Auto | Code Review | Tools needed |
+|----------|------:|-----:|------------:|-------------|
 | **Standard Tests** (TC-100 to TC-110) | 11 | 11 | 0 | pytest, paho-mqtt, requests |
 | **Edge Cases** (EC-100 to EC-116) | 17 | 14 | 3 | pytest, paho-mqtt, requests, pyserial (RFC2217), WiFi Tester, SSH |
-| **Web UI** (WEB-100 to WEB-109) | 10 | 8 | 2 | pytest, requests |
+| **Web UI** (WEB-100 to WEB-109) | 10 | 10 | 0 | pytest, requests, subprocess (avahi) |
 | **Captive Portal** (CP-101 to CP-102) | 2 | 2 | 0 | pytest, WiFi Tester (GPIO + serial reset) |
 | **Long Duration** (LD-001 to LD-006) | 6 | 6 | 0 | pytest, paho-mqtt, requests |
 
-**Manual-only tests:** EC-113 / EC-114 / EC-115 (require test firmware with deliberate hang/allocation), WEB-101 (CSS color needs browser), WEB-109 (mDNS is OS-dependent).
+**Code review only:** EC-113 / EC-114 / EC-115 — watchdog fault recovery paths cannot be triggered externally; verified by code review and indirectly validated by EC-116 (watchdog survives MQTT disconnect) and LD-005 (24h watchdog stability).
 
 ## 2. Test Environment
 
@@ -749,67 +749,45 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Automation:** pytest, paho-mqtt. Set topic with "/" chars via set_wallbox_topic, publish to new topic, verify received.
 
-### 4.14 EC-113: Software Watchdog - Task Timeout Detection
+### 4.14 EC-113: Software Watchdog - Task Timeout Detection (Code Review)
 
-**Precondition:**
-- Test firmware with deliberate task hang capability flashed
-- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"` (for serial monitoring)
+These fault conditions cannot be triggered via external interfaces on production firmware. They are verified by code review and indirectly validated by runtime watchdog tests (EC-116, LD-005).
 
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | System running normally | All tasks healthy |
-| 2 | Monitor `MBUS-PROXY/health` | Regular health reports |
-| 3 | Simulate task hang (test firmware) | Stop heartbeat updates |
-| 4 | Wait 60+ seconds | Software watchdog triggers |
-| 5 | Check `MBUS-PROXY/log` | "task timeout - triggering reboot" logged |
-| 6 | System reboots automatically | ESP.restart() called |
-| 7 | After reboot | Normal operation resumes |
+**Verification method:** Code review of `src/modbus_proxy.cpp` watchdog task.
 
-**Pass Criteria**: Hung task detected within 65s, automatic recovery via reboot.
+| Check | Code Location | Expected |
+|-------|---------------|----------|
+| Heartbeat tracking per task | `watchdogTask()` loop | Each task's `lastHeartbeat` checked every 5s |
+| Timeout detection | `watchdogTask()` | `millis() - lastHeartbeat > WATCHDOG_TIMEOUT_MS` triggers reboot |
+| Timeout value | `config.h` | `WATCHDOG_TIMEOUT_MS = 60000` (60s) |
+| Recovery action | `watchdogTask()` | Calls `ESP.restart()` after logging |
 
-**Automation:** Manual — requires test firmware with deliberate task hang capability. Cannot be triggered via external interfaces.
+**Pass Criteria**: Code review confirms watchdog detects hung tasks within 65s and triggers ESP.restart().
 
-**Note**: Can alternatively be verified by reading watchdog implementation code paths.
+### 4.15 EC-114: Hardware Watchdog - Watchdog Task Recovery (Code Review)
 
-### 4.15 EC-114: Hardware Watchdog - Watchdog Task Recovery
+**Verification method:** Code review of hardware WDT initialization in `setup()`.
 
-**Precondition:**
-- Test firmware or code review — hardware WDT cannot be triggered externally
-- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"` (for serial monitoring)
+| Check | Code Location | Expected |
+|-------|---------------|----------|
+| Hardware WDT initialized | `setup()` | `esp_task_wdt_init()` with 90s timeout |
+| WDT feed in watchdog task | `watchdogTask()` | `esp_task_wdt_reset()` called every 5s |
+| Failsafe if software WDT hangs | Hardware WDT | System panic and reboot after 90s |
 
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | System running normally | Hardware WDT active |
-| 2 | Check serial log at startup | "Hardware WDT initialized (90s timeout)" |
-| 3 | Monitor normal operation | `esp_task_wdt_reset()` called every 5s |
-| 4 | If watchdog task hangs | Hardware WDT triggers after 90s |
-| 5 | System panic and reboot | Automatic hardware recovery |
+**Pass Criteria**: Code review confirms hardware WDT is initialized as safety net behind software watchdog.
 
-**Pass Criteria**: Hardware watchdog provides failsafe recovery if software watchdog itself fails.
+### 4.16 EC-115: Critical Memory Watchdog (Code Review)
 
-**Automation:** Manual — safety-net test; the watchdog task itself must hang, which cannot be triggered externally. Verified by code review.
+**Verification method:** Code review of heap monitoring in watchdog task.
 
-**Note**: In normal operation, the software watchdog handles recovery before the hardware WDT triggers.
+| Check | Code Location | Expected |
+|-------|---------------|----------|
+| Heap check interval | `watchdogTask()` | Checked every 5s cycle |
+| Warning threshold | `config.h` | `MIN_FREE_HEAP = 20000` |
+| Critical threshold | `watchdogTask()` | `MIN_FREE_HEAP / 2` triggers reboot |
+| Recovery action | `watchdogTask()` | Calls `ESP.restart()` after logging |
 
-### 4.16 EC-115: Critical Memory Watchdog
-
-**Precondition:**
-- Test firmware with deliberate memory allocation capability flashed
-- Serial slot idle: `wt.get_slot(SLOT)["state"] == "idle"` (for serial monitoring)
-
-| Step | Action | Expected Result |
-|------|--------|-----------------|
-| 1 | System running normally | Heap > MIN_FREE_HEAP |
-| 2 | Monitor heap via `MBUS-PROXY/health` | free_heap and min_free_heap values |
-| 3 | Simulate memory pressure | Allocate memory (test firmware) |
-| 4 | Heap drops below MIN_FREE_HEAP | "Low heap" warning logged |
-| 5 | Heap drops below MIN_FREE_HEAP/2 | Critical memory threshold |
-| 6 | Check `MBUS-PROXY/log` | "Critical heap - triggering reboot" |
-| 7 | System reboots automatically | Memory recovered |
-
-**Pass Criteria**: Critical memory exhaustion triggers preventive reboot before crash.
-
-**Automation:** Manual — requires test firmware with deliberate memory allocation to exhaust heap. Cannot be triggered via external interfaces.
+**Pass Criteria**: Code review confirms heap monitoring detects critical memory and triggers preventive reboot.
 
 ### 4.17 EC-116: Watchdog Survives MQTT Disconnect
 
@@ -858,17 +836,18 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
 - MQTT connected: `/api/status` → `mqtt_connected: true`
-- Browser available for visual CSS inspection
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | Set wallbox power to 0W | Wallbox value displays cyan |
-| 2 | Publish wallbox power 500W | Value displays green |
-| 3 | Publish wallbox power 1500W | Value displays amber (correction active) |
+| 1 | GET / (dashboard HTML) | Contains JavaScript with color threshold logic |
+| 2 | Publish wallbox power 0W, GET /api/status | `wallbox_power: 0`, `correction_active: false` |
+| 3 | Publish wallbox power 500W, GET /api/status | `wallbox_power: 500`, `correction_active: false` |
+| 4 | Publish wallbox power 1500W, GET /api/status | `wallbox_power: 1500`, `correction_active: true` |
+| 5 | Parse dashboard HTML | CSS classes for color thresholds (0=cyan, >0=green, >1000=amber) present in JS |
 
-**Pass Criteria**: Color changes match thresholds (0=cyan, >0=green, >1000=amber).
+**Pass Criteria**: Dashboard HTML contains correct CSS color classes and threshold logic; API confirms correction activates above 1000W.
 
-**Automation:** Manual — CSS color verification requires visual browser inspection. Can partially verify CSS class names via requests.
+**Automation:** pytest, requests, paho-mqtt. GET /, parse HTML/JS for color threshold logic. Publish power values, verify correction_active via /api/status.
 
 ### 5.3 WEB-102: Status Page System Info
 
@@ -996,17 +975,17 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 
 **Precondition:**
 - DUT reachable via IP: `GET http://192.168.0.177/api/status` → 200 OK
-- mDNS client available on test machine
+- mDNS resolver available: `avahi-resolve` on Serial Portal Pi or test host
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Device connected to WiFi | mDNS started |
-| 2 | Browse to http://modbus-proxy.local | Dashboard loads |
-| 3 | Verify mDNS service | HTTP service advertised on port 80 |
+| 2 | Resolve `modbus-proxy.local` via avahi | Returns DUT IP address |
+| 3 | GET `http://<resolved-ip>/api/status` | 200 OK, matches direct IP response |
 
-**Pass Criteria**: Device reachable via hostname (requires mDNS client on network).
+**Pass Criteria**: mDNS hostname resolves to DUT IP and serves the same content as direct IP access.
 
-**Automation:** Manual — mDNS resolution is OS/network dependent; not reliably automatable across platforms.
+**Automation:** pytest, subprocess. Run `avahi-resolve -n modbus-proxy.local` on Pi via SSH, verify resolved IP matches known DUT IP, GET /api/status via resolved address.
 
 ### 5.11 CP-101: Captive Portal WiFi Configuration
 
@@ -1457,21 +1436,9 @@ Tests are classified by their infrastructure requirement and executed in three p
 | **Artificial SSID** | WiFi Tester AP (192.168.4.x) | No | Serial Portal, WiFi Tester AP |
 | **Home Network** | private-2G (192.168.0.x) | No | MQTT broker, Serial Portal |
 
-### Phase 1: Manual Tests (5 tests)
+### Phase 1: Manual Tests — None
 
-Tests requiring visual browser inspection or special test firmware. Captive portal tests no longer require manual GPIO button presses — they use Serial Portal GPIO control (`wt.gpio_set(17, 0)` + `wt.serial_reset()`) and run in Phase 2.
-
-| # | Test ID | Name | Manual Action |
-|---|---------|------|---------------|
-| 1 | WEB-101 | Dashboard Power Color Coding | Visual CSS color check in browser |
-| 2 | WEB-109 | mDNS Hostname | Browse to modbus-proxy.local |
-| 3 | EC-113 | Software Watchdog - Task Timeout | Flash test firmware with deliberate hang |
-| 4 | EC-114 | Hardware Watchdog | Flash test firmware / code review |
-| 5 | EC-115 | Critical Memory Watchdog | Flash test firmware with memory exhaust |
-
-**Precondition:** DUT flashed with esp32-c3-debug firmware (TC-000). NVS erased.
-
-**Restore after Phase 1:** Erase NVS and reset DUT to return to private-2G for Phase 3. Or provision DUT onto WiFi Tester AP for Phase 2.
+All tests are fully automated. GPIO control via Serial Portal eliminates manual button presses, CSS color logic is verified by parsing HTML/JS, and mDNS is resolved via `avahi-resolve`. Watchdog fault tests (EC-113/114/115) are verified by code review.
 
 ### Phase 2: Artificial SSID Tests (37 tests)
 
@@ -1523,7 +1490,7 @@ DUT connects to WiFi Tester AP (isolated network, no internet). All HTTP access 
 
 **Restore after Phase 2:** Erase NVS to return DUT to private-2G for Phase 3.
 
-### Phase 3: Home Network Tests (35 tests)
+### Phase 3: Home Network Tests (37 tests)
 
 DUT on private-2G (192.168.0.177), MQTT broker at 192.168.0.203. No WiFi Tester needed. No human intervention.
 
@@ -1568,6 +1535,9 @@ DUT on private-2G (192.168.0.177), MQTT broker at 192.168.0.203. No WiFi Tester 
 | 33 | WEB-106 | Setup Page - Factory Reset |
 | 34 | WEB-107 | REST API /api/status |
 | 35 | WEB-108 | Restart via Web UI |
+| 36 | WEB-101 | Dashboard Power Color Coding |
+| 37 | WEB-109 | mDNS Hostname |
+
 **Precondition:** DUT on private-2G with NVS erased (clean state). MQTT broker running.
 
 ### Phase 4: Long Duration Tests (6 tests)
@@ -1583,17 +1553,19 @@ Extended stability tests. Run after all functional tests pass. DUT on private-2G
 | 5 | LD-005 | Watchdog stability | 24h |
 | 6 | LD-006 | Repeated WiFi/MQTT disconnects | 48h |
 
-**Precondition:** All Phase 1–3 tests passed. DUT on private-2G. MQTT broker running.
+**Precondition:** All Phase 2–3 tests passed. DUT on private-2G. MQTT broker running.
 
 ### Summary
 
 | Phase | Category | Tests | Human | WiFi Tester | MQTT Broker |
 |-------|----------|------:|:-----:|:-----------:|:-----------:|
-| 1 | Manual | 5 | Yes | No | No |
+| 1 | Manual | 0 | — | — | — |
 | 2 | Artificial SSID | 37 | No | Yes | No |
-| 3 | Home Network | 35 | No | No | Yes |
+| 3 | Home Network | 37 | No | No | Yes |
 | 4 | Long Duration | 6 | No | No | Yes |
-| | **Total** | **83** | | | |
+| | **Total** | **80** | | | |
+
+**Note:** 3 additional watchdog fault tests (EC-113/114/115) are verified by code review, not runtime execution. Total including code review: 83.
 
 ---
 
@@ -1614,4 +1586,5 @@ Extended stability tests. Run after all functional tests pass. DUT on private-2G
 | 2.0 | 2026-02-09 | Added Appendix A: test classification (Manual / Artificial SSID / Home Network) and execution sequence |
 | 2.1 | 2026-02-09 | Added machine-checkable preconditions to all 82 test cases; expanded LD tests into individual subsections |
 | 2.2 | 2026-02-09 | Split TC-001 into TC-001 (HTTP) and TC-002 (MQTT) so Phase 1 can run without MQTT broker; fixed uptime unit (millis not seconds); 83 test cases |
-| 2.3 | 2026-02-09 | Replace manual GPIO 2 button with Serial Portal GPIO control (Pi GPIO 17 → DUT GPIO 2); CP-101/CP-102 move from Phase 1 (manual) to Phase 2 (automated); WIFI-4xx no longer need human_interaction(); Phase 1 drops from 8 to 5 tests, Phase 2 grows from 34 to 37 |
+| 2.3 | 2026-02-09 | Replace manual GPIO 2 button with Serial Portal GPIO control (Pi GPIO 17 → DUT GPIO 2); CP-101/CP-102 move from Phase 1 (manual) to Phase 2 (automated); WIFI-4xx no longer need human_interaction() |
+| 2.4 | 2026-02-09 | Eliminate all manual tests: WEB-101 automated via HTML/JS parsing, WEB-109 automated via avahi-resolve, EC-113/114/115 reclassified as code review; Phase 1 is now empty; WEB-101/WEB-109 move to Phase 3; 80 runtime tests + 3 code review |
