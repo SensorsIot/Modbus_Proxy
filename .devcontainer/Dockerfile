@@ -31,3 +31,4 @@ USER dev
 
 # Set default working directory for SSH logins
 WORKDIR /workspaces/Modbus_Proxy
+RUN echo 'cd /workspaces/Modbus_Proxy 2>/dev/null' >> /home/dev/.bashrc
