@@ -35,6 +35,7 @@
     "workspaceFolder": "/workspaces/Modbus_Proxy",
     "remoteUser": "dev",
     "runArgs": [
+        "--name", "modbus-proxy",
         "--device-cgroup-rule=c 188:* rmw"
     ],
     "mounts": [

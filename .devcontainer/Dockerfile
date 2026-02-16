@@ -28,3 +28,6 @@ RUN echo 'SUBSYSTEMS=="usb", ATTRS{idVendor}=="303a", MODE="0666"' > /etc/udev/r
 ENV PATH="/home/dev/.local/bin:${PATH}"
 
 USER dev
+
+# Set default working directory for SSH logins
+WORKDIR /workspaces/Modbus_Proxy
