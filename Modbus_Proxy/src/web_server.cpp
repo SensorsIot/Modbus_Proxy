@@ -183,10 +183,14 @@ void handleApiStatus(AsyncWebServerRequest *request) {
   doc["mqtt_reconnects"] = systemHealth.mqttReconnects;
 
   // Power readings
-  doc["dtsu_power"] = sharedDTSU.valid ? sharedDTSU.parsedData.power_total : 0.0f;
+  // sharedDTSU.parsedData already has correction applied (from proxyTask),
+  // so sun2000_power is just the corrected total — do NOT add powerCorrection again.
+  float correctedTotal = sharedDTSU.valid ? sharedDTSU.parsedData.power_total : 0.0f;
+  float originalDtsu = sharedDTSU.valid ?
+    (correctedTotal - (powerCorrectionActive ? powerCorrection : 0.0f)) : 0.0f;
+  doc["dtsu_power"] = originalDtsu;
   doc["wallbox_power"] = powerCorrection;
-  doc["sun2000_power"] = sharedDTSU.valid ?
-    (sharedDTSU.parsedData.power_total + (powerCorrectionActive ? powerCorrection : 0.0f)) : 0.0f;
+  doc["sun2000_power"] = correctedTotal;
   doc["correction_active"] = powerCorrectionActive;
 
   // Statistics
