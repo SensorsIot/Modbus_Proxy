@@ -130,8 +130,6 @@ void mqttTask(void *pvParameters) {
       lastDebugTime = millis();
     }
 
-    // Update heartbeat for watchdog
-    updateTaskHealthbeat(false);
     systemHealth.lastHealthReport = millis();
 
     // Handle reconnect request (from config change)
@@ -144,21 +142,54 @@ void mqttTask(void *pvParameters) {
     }
 
     // MQTT connection handling
+    //
+    // Two rules matter here, both learned from a 13-hour outage:
+    //
+    //   1. Never attempt a connect while WiFi is down. Each attempt blocks on
+    //      DNS and TCP until the socket times out, and on this single-core
+    //      part those multi-second stalls starve the RS485 relay, which has
+    //      to meet Modbus RTU inter-frame timing at 9600 baud. The inverter
+    //      sees the missed frames as failed meter reads. Relaying the meter
+    //      is the device's actual job and must not degrade because the
+    //      network is unhappy.
+    //
+    //   2. Back off between attempts, so a broker that is down does not turn
+    //      into a tight reconnect loop.
     static bool wasConnected = false;
+    static uint32_t mqttBackoffMs = MQTT_BACKOFF_MIN_MS;
+    static uint32_t nextMqttAttempt = 0;
+
     if (!mqttClient.connected()) {
       if (wasConnected) {
         MLOG_WARN("MQTT", "Connection lost (state=%d)", mqttClient.state());
         wasConnected = false;
       }
       mqttLoggerConnected = false;
-      DEBUG_PRINTF("MQTT reconnecting... (state=%d)\n", mqttClient.state());
-      if (connectToMQTT()) {
-        wasConnected = true;
-      } else {
-        DEBUG_PRINTLN("MQTT connection failed, continuing anyway");
+
+      if (WiFi.status() != WL_CONNECTED) {
+        // No link: skip the connect entirely and let the health check
+        // supervise WiFi recovery. Keep the backoff armed at its minimum so
+        // the first attempt after the link returns is immediate.
+        mqttBackoffMs = MQTT_BACKOFF_MIN_MS;
+        nextMqttAttempt = 0;
+      } else if (millis() >= nextMqttAttempt) {
+        DEBUG_PRINTF("MQTT reconnecting... (state=%d)\n", mqttClient.state());
+        if (connectToMQTT()) {
+          wasConnected = true;
+          mqttBackoffMs = MQTT_BACKOFF_MIN_MS;
+          nextMqttAttempt = 0;
+        } else {
+          nextMqttAttempt = millis() + mqttBackoffMs;
+          DEBUG_PRINTF("MQTT connection failed, retrying in %lu ms\n", mqttBackoffMs);
+          mqttBackoffMs = (mqttBackoffMs * 2 > MQTT_BACKOFF_MAX_MS)
+                            ? MQTT_BACKOFF_MAX_MS
+                            : mqttBackoffMs * 2;
+        }
       }
     } else {
       wasConnected = true;
+      mqttBackoffMs = MQTT_BACKOFF_MIN_MS;
+      nextMqttAttempt = 0;
     }
 
     // Process MQTT loop
@@ -191,6 +222,12 @@ void mqttTask(void *pvParameters) {
     if (totalLoopTime > 5000) {
       DEBUG_PRINTF("MQTT task loop took %lu ms (too long!)\n", totalLoopTime);
     }
+
+    // Heartbeat last, not first. Stamped at the top of the loop it was written
+    // before any connection work and regardless of the outcome, so a task
+    // failing every single iteration reassured the watchdog exactly as much as
+    // a healthy one. Here it means "this iteration actually completed".
+    updateTaskHealthbeat(false);
 
     vTaskDelay(pdMS_TO_TICKS(100));
   }

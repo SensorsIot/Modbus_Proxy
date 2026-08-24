@@ -1,6 +1,7 @@
 #include "modbus_proxy.h"
 #include "debug.h"
 #include "mqtt_logger.h"
+#include "wifi_manager.h"
 #include <esp_task_wdt.h>
 
 // Serial interfaces
@@ -257,9 +258,77 @@ void updateTaskHealthbeat(bool isProxyTask) {
   }
 }
 
+// Runtime connectivity supervision.
+//
+// Before this existed the firmware only ever checked WiFi once, inside
+// connectWiFi() during setup(). Once associated it assumed the link was
+// permanent: when the AP dropped the device it sat there indefinitely, tasks
+// looping happily, because nothing retried and nothing noticed.
+static void superviseConnectivity(uint32_t currentTime, bool& criticalFailure) {
+  static uint32_t wifiDownSince = 0;
+  static uint32_t lastWiFiRetry = 0;
+  static uint32_t mqttDownSince = 0;
+
+  // The captive portal runs the radio in AP mode on purpose, so "not
+  // connected as a station" is the expected state there, not a fault.
+  if (isCaptivePortalActive()) {
+    wifiDownSince = 0;
+    mqttDownSince = 0;
+    return;
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    if (wifiDownSince == 0) {
+      wifiDownSince = currentTime;
+      MLOG_WARN("WIFI", "Link lost (status=%d) - starting recovery", WiFi.status());
+    }
+
+    if (currentTime - lastWiFiRetry > WIFI_RETRY_INTERVAL_MS) {
+      lastWiFiRetry = currentTime;
+      DEBUG_PRINTLN("WiFi down - attempting reconnect");
+      WiFi.reconnect();
+    }
+
+    // This is what config.h has always promised: restart if no WiFi.
+    if (currentTime - wifiDownSince > WIFI_MQTT_RECOVERY_TIMEOUT_MS) {
+      DEBUG_PRINTF("WIFI DOWN %lu ms - rebooting\n", currentTime - wifiDownSince);
+      MLOG_ERROR("WIFI", "Down %lums - triggering reboot", currentTime - wifiDownSince);
+      reportSystemError("WIFI", "WiFi unrecoverable", currentTime - wifiDownSince);
+      criticalFailure = true;
+    }
+
+    // MQTT cannot be up without WiFi; do not also count it as an MQTT fault.
+    mqttDownSince = 0;
+    return;
+  }
+
+  if (wifiDownSince != 0) {
+    MLOG_INFO("WIFI", "Link recovered after %lums, IP %s",
+              currentTime - wifiDownSince, WiFi.localIP().toString().c_str());
+    wifiDownSince = 0;
+  }
+
+  // WiFi is up. A task that is looping but has not reached the broker for a
+  // long time is not healthy, however diligently it stamps its heartbeat.
+  if (!mqttClient.connected()) {
+    if (mqttDownSince == 0) {
+      mqttDownSince = currentTime;
+    } else if (currentTime - mqttDownSince > MQTT_DOWN_REBOOT_MS) {
+      DEBUG_PRINTF("MQTT DOWN %lu ms with WiFi up - rebooting\n", currentTime - mqttDownSince);
+      MLOG_ERROR("MQTT", "Down %lums with WiFi up - triggering reboot", currentTime - mqttDownSince);
+      reportSystemError("MQTT", "MQTT unrecoverable", currentTime - mqttDownSince);
+      criticalFailure = true;
+    }
+  } else {
+    mqttDownSince = 0;
+  }
+}
+
 void performHealthCheck() {
   uint32_t currentTime = millis();
   bool criticalFailure = false;
+
+  superviseConnectivity(currentTime, criticalFailure);
 
   if (currentTime - proxyTaskLastSeen > WATCHDOG_TIMEOUT_MS) {
     DEBUG_PRINTF("PROXY TASK TIMEOUT: %lu ms since last heartbeat\n",
