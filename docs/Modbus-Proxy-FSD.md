@@ -1,7 +1,8 @@
 # ESP32 MODBUS RTU Intelligent Proxy - Functional Specification Document
 
-**Version:** 5.6
-**Date:** February 2026
+**Version:** 5.7
+**Date:** August 2026
+**Firmware:** 1.3.0
 **Platform:** ESP32-C3 (single-core RISC-V)
 **Author:** Andreas Spiess / Claude Code
 
@@ -304,7 +305,7 @@ board_build.usb_cdc = true
 board_build.arduino.memory_type = qio_qspi
 ```
 
-### 8.3 Dependencies
+### 8.4 Dependencies
 - ArduinoJson @ ^6.19.4
 - PubSubClient @ ^2.8
 - ArduinoOTA
@@ -312,6 +313,27 @@ board_build.arduino.memory_type = qio_qspi
 - mathieucarbou/ESP Async WebServer @ ^3.0.6
 - mathieucarbou/AsyncTCP @ ^3.3.2
 - ESPmDNS (built-in)
+
+### 8.5 Continuous Integration and Releases
+
+`.github/workflows/build.yml` runs on pushes to `main`, pull requests, and `v*`
+tags:
+
+| Job | Scope |
+|-----|-------|
+| `build` | Matrix over `esp32-c3-debug`, `esp32-c3-release`, `esp32-c3-production`; uploads `firmware.bin` and `firmware.elf` per environment |
+| `unit-test` | `pio test -e unit-test` on the native platform |
+| `release` | Tag builds only: attaches the production and release binaries plus `SHA256SUMS` to a GitHub release |
+
+The `release` job requires both other jobs to pass, and fails if the tag does not
+match `FW_VERSION` in `config.h`.
+
+**CI credentials**: `credentials.h` is gitignored, so CI copies
+`credentials.h.example` over it before building. Released binaries therefore
+carry placeholder WiFi credentials and rely on NVS-provisioned credentials at
+runtime. A device with no valid NVS credentials cannot join WiFi from a released
+binary; flash such a device over USB with a locally built image, or provision it
+through the captive portal first.
 
 ---
 
@@ -344,19 +366,43 @@ board_build.arduino.memory_type = qio_qspi
 - Task heartbeat timeout: 60 seconds
 - Health check interval: 5 seconds
 
+The MQTT task stamps its heartbeat at the **end** of each loop iteration, so the
+heartbeat records a completed iteration rather than a started one.
+
 **Hardware Watchdog (ESP32 WDT)**:
 - Timeout: 90 seconds
 - Panic on timeout: enabled
 
-### 10.2 Auto-Restart Triggers
+### 10.2 Connectivity Supervision
+
+`performHealthCheck()` supervises the network on every health check interval:
+
+| Condition | Action |
+|-----------|--------|
+| WiFi disconnected | `WiFi.reconnect()` every `WIFI_RETRY_INTERVAL_MS` (15 s) |
+| WiFi down > `WIFI_MQTT_RECOVERY_TIMEOUT_MS` (60 s) | `ESP.restart()` |
+| MQTT down > `MQTT_DOWN_REBOOT_MS` (10 min) **while WiFi is up** | `ESP.restart()` |
+| Captive portal active | Supervision suspended (AP mode is not a station fault) |
+
+MQTT downtime is only counted while WiFi is connected; a WiFi outage is handled
+by the WiFi timer alone.
+
+### 10.3 Auto-Restart Triggers
 
 - Task heartbeat timeout (proxy or MQTT task)
 - Critical memory shortage (< 10KB free heap)
+- WiFi down longer than 60 seconds
+- MQTT down longer than 10 minutes while WiFi is connected
 - Hardware watchdog timeout
 
-### 10.3 Graceful Degradation
+### 10.4 Graceful Degradation
 
-- **MQTT disconnect**: Continues MODBUS proxy, reconnects automatically
+- **WiFi down**: MQTT connection attempts are skipped entirely, so blocking
+  DNS/TCP timeouts cannot stall the RS485 relay. MODBUS proxying continues at
+  full rate.
+- **MQTT disconnect (WiFi up)**: Continues MODBUS proxy; reconnects with
+  exponential backoff from `MQTT_BACKOFF_MIN_MS` (1 s) to `MQTT_BACKOFF_MAX_MS`
+  (60 s). Backoff resets on success.
 - **Wallbox data stale**: Disables power correction, logs warning
 - **Low memory warning**: Logs warning at < 20KB free heap
 
@@ -447,13 +493,22 @@ Allows initial WiFi configuration without reflashing firmware. The captive porta
 
 ### 13.3 WiFi/MQTT Recovery (Normal Boot)
 
-When GPIO 2 is not pressed (normal boot):
-1. Attempt WiFi connection with stored credentials (NVS or compiled defaults)
-2. If WiFi connects: start MQTT, web server, and Modbus proxy as normal
-3. If WiFi or MQTT fails to connect within **60 seconds**: `ESP.restart()`
-4. On restart, retry from step 1 — the device never enters captive portal without the button
+**At boot**, when GPIO 2 is not pressed:
+1. Attempt WiFi connection with NVS credentials, if stored (up to `WIFI_CONNECT_TIMEOUT_MS`, 30 s)
+2. If that fails, attempt the credentials compiled in from `credentials.h` (a further 30 s)
+3. If WiFi connects: start MQTT, web server, and Modbus proxy as normal
+4. If WiFi fails: wait `WIFI_MQTT_RECOVERY_TIMEOUT_MS` (60 s), then `ESP.restart()`
+5. On restart, retry from step 1 — the device never enters captive portal without the button
 
-This ensures automatic recovery from transient WiFi/MQTT outages without human intervention, while preventing the device from getting stuck in a non-functional state.
+The proxy, MQTT and watchdog tasks are created only after WiFi connects, so the
+MODBUS relay does not run while the device is in the boot retry cycle.
+
+**At runtime**, connectivity is supervised by `performHealthCheck()` (Section
+10.2): WiFi is retried every 15 s and the device restarts if the link stays down
+past 60 seconds, or if MQTT stays down for 10 minutes while WiFi is up.
+
+Stale NVS credentials cost boot time: each stored SSID that no longer exists is
+tried for the full 30 second connect timeout before the fallback is attempted.
 
 ### 13.4 Captive Portal Behavior
 
@@ -916,6 +971,7 @@ See DTSU-666 datasheet for complete register definitions (2102-2181)
 ---
 
 **Document Version History**:
+- v5.7 (August 2026): Runtime connectivity supervision (WiFi retry and reboot, MQTT backoff, MQTT-down reboot), MQTT heartbeat moved to end of loop, hostname set after `WiFi.mode(WIFI_STA)`, GitHub Actions build and release pipeline; firmware 1.3.0
 - v5.6 (February 2026): Added test infrastructure section (17.4) documenting isolated artificial network with Pi-hosted mosquitto broker (192.168.4.1:1883); all tests run on ESP32 Tester AP, no dependency on home network
 - v5.5 (February 2026): GPIO 2 button trigger replaces 3-power-cycle boot counter for captive portal activation; 60-second WiFi/MQTT recovery restart (no portal on failure); removed boot_count from NVS
 - v5.4 (February 2026): WPA2 captive portal (password "modbus-setup"), NVS bug fixes (`&=` bitwise AND with `putString()` return value, double-open in `initNVSConfig()`), boot count reset after portal WiFi save, captive portal tests passing
