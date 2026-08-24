@@ -1,7 +1,7 @@
 #pragma once
 
 // Firmware version
-#define FW_VERSION "1.2.0"
+#define FW_VERSION "1.3.0"
 
 // Serial debug level: 0=OFF, 1=INFO, 2=DEBUG
 #ifndef SERIAL_DEBUG_LEVEL
@@ -101,6 +101,22 @@ const uint32_t MQTT_PUBLISH_INTERVAL = 1000;
 // Memory thresholds
 const uint32_t MIN_FREE_HEAP = 20000;
 
+// Runtime connectivity supervision (see performHealthCheck)
+// WiFi is retried on this cadence rather than on every health check, so a
+// reconnect attempt has time to finish before the next one is issued.
+const uint32_t WIFI_RETRY_INTERVAL_MS = 15000;
+
+// MQTT reconnects back off exponentially between these bounds. Without a
+// backoff every failed connect blocks on DNS/TCP timeouts, which on this
+// single-core part starves the RS485 relay and corrupts Modbus RTU framing.
+const uint32_t MQTT_BACKOFF_MIN_MS = 1000;
+const uint32_t MQTT_BACKOFF_MAX_MS = 60000;
+
+// Reboot if MQTT stays down this long *while WiFi is up*. A WiFi outage is
+// already covered by WIFI_MQTT_RECOVERY_TIMEOUT_MS; this catches a broker or
+// session problem that a reconnect loop cannot clear on its own.
+const uint32_t MQTT_DOWN_REBOOT_MS = 600000;  // 10 minutes
+
 // MQTT topics - hierarchical structure under MBUS-PROXY
 #define MQTT_TOPIC_ROOT "MBUS-PROXY"
 #define MQTT_TOPIC_POWER MQTT_TOPIC_ROOT "/power"
@@ -120,5 +136,6 @@ const uint32_t MIN_FREE_HEAP = 20000;
 #define CAPTIVE_PORTAL_GATEWAY IPAddress(192, 168, 4, 1)
 #define CAPTIVE_PORTAL_SUBNET IPAddress(255, 255, 255, 0)
 #define CAPTIVE_PORTAL_TIMEOUT_MS 300000  // 5 minutes
+#define WIFI_HOSTNAME "MODBUS-Proxy"
 #define WIFI_CONNECT_TIMEOUT_MS 30000     // 30 seconds
 #define WIFI_MQTT_RECOVERY_TIMEOUT_MS 60000  // 60 seconds - restart if no WiFi/MQTT

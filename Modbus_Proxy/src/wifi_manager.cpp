@@ -9,8 +9,18 @@ DNSServer* dnsServer = nullptr;
 
 bool initWiFiManager() {
   WiFi.setSleep(false);
-  WiFi.setHostname("MODBUS-Proxy");
+  // NOTE: setHostname() is deliberately NOT called here. On ESP32 it only
+  // takes effect between WiFi.mode(WIFI_STA) and WiFi.begin(); called before
+  // the mode is set it is silently dropped and the device shows up in DHCP as
+  // "espressif". startStationMode() below does it in the right order.
   return true;
+}
+
+// Put the radio in station mode and apply the hostname in the one window
+// where the ESP32 will actually honour it: after mode(), before begin().
+static void startStationMode() {
+  WiFi.mode(WIFI_STA);
+  WiFi.setHostname(WIFI_HOSTNAME);
 }
 
 WiFiState connectWiFi(uint32_t timeoutMs) {
@@ -21,7 +31,7 @@ WiFiState connectWiFi(uint32_t timeoutMs) {
   if (loadWiFiCredentials(nvsSSID, sizeof(nvsSSID), nvsPass, sizeof(nvsPass))) {
     DEBUG_PRINTF("Trying NVS WiFi credentials: SSID=%s\n", nvsSSID);
 
-    WiFi.mode(WIFI_STA);
+    startStationMode();
     WiFi.begin(nvsSSID, nvsPass);
 
     uint32_t startTime = millis();
@@ -48,7 +58,7 @@ WiFiState connectWiFi(uint32_t timeoutMs) {
   // Fallback to credentials.h
   DEBUG_PRINTF("Trying fallback WiFi credentials: SSID=%s\n", ssid);
 
-  WiFi.mode(WIFI_STA);
+  startStationMode();
   WiFi.begin(ssid, password);
 
   uint32_t startTime = millis();
