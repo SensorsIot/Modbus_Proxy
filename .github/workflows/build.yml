@@ -3,15 +3,25 @@ name: Build
 on:
   push:
     branches: [main, master]
+    tags: ["v*"]
   pull_request:
     branches: [main, master]
+  workflow_dispatch:
 
 env:
-  PLATFORMIO_VERSION: "6.1.16"
+  PLATFORMIO_VERSION: "6.1.18"
 
 jobs:
   build:
+    name: Build ${{ matrix.environment }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        environment:
+          - esp32-c3-debug
+          - esp32-c3-release
+          - esp32-c3-production
 
     steps:
       - name: Checkout
@@ -22,22 +32,130 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install PlatformIO
-        run: |
-          pip install platformio==${{ env.PLATFORMIO_VERSION }}
-
       - name: Cache PlatformIO
         uses: actions/cache@v4
         with:
           path: |
             ~/.platformio
-            .pio
-          key: ${{ runner.os }}-pio-${{ hashFiles('**/platformio.ini') }}
+            Modbus_Proxy/.pio
+          key: ${{ runner.os }}-pio-${{ matrix.environment }}-${{ hashFiles('Modbus_Proxy/platformio.ini') }}
           restore-keys: |
+            ${{ runner.os }}-pio-${{ matrix.environment }}-
             ${{ runner.os }}-pio-
 
-      - name: Install dependencies
-        run: make install
+      - name: Install PlatformIO
+        run: pip install platformio==${{ env.PLATFORMIO_VERSION }}
+
+      # credentials.h is gitignored (it holds the real WiFi secrets), but three
+      # sources #include it. CI builds against the checked-in example so the
+      # firmware compiles without ever putting secrets in the repo.
+      - name: Provide placeholder credentials
+        run: cp Modbus_Proxy/src/credentials.h.example Modbus_Proxy/src/credentials.h
 
       - name: Build firmware
-        run: make build
+        run: pio run -e ${{ matrix.environment }} --project-dir Modbus_Proxy
+
+      - name: Report binary size
+        run: |
+          pio run -e ${{ matrix.environment }} --project-dir Modbus_Proxy --target size \
+            | tail -20
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.environment }}
+          path: |
+            Modbus_Proxy/.pio/build/${{ matrix.environment }}/firmware.bin
+            Modbus_Proxy/.pio/build/${{ matrix.environment }}/firmware.elf
+          if-no-files-found: error
+          retention-days: 30
+
+  unit-test:
+    name: Unit tests (native)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: ${{ runner.os }}-pio-native-${{ hashFiles('Modbus_Proxy/platformio.ini') }}
+          restore-keys: ${{ runner.os }}-pio-native-
+
+      - name: Install PlatformIO
+        run: pip install platformio==${{ env.PLATFORMIO_VERSION }}
+
+      - name: Run unit tests
+        run: pio test -e unit-test --project-dir Modbus_Proxy
+
+  release:
+    name: Publish release
+    # Gated on both: no release goes out unless every firmware environment
+    # compiles and all native unit tests pass.
+    needs: [build, unit-test]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      # The tag is the source of truth for the release name; FW_VERSION in
+      # config.h is what the running device reports over MQTT and the web UI.
+      # If they disagree the device lies about which build it is, so fail here.
+      - name: Verify tag matches FW_VERSION
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          fw=$(sed -n 's/.*#define[[:space:]]*FW_VERSION[[:space:]]*"\([^"]*\)".*/\1/p' Modbus_Proxy/src/config.h)
+          echo "tag=$tag  FW_VERSION=$fw"
+          if [ "$tag" != "$fw" ]; then
+            echo "::error::Tag v$tag does not match FW_VERSION $fw in Modbus_Proxy/src/config.h"
+            exit 1
+          fi
+
+      - name: Stage release assets
+        run: |
+          mkdir -p release
+          cp artifacts/firmware-esp32-c3-production/firmware.bin \
+             release/modbus-proxy-${GITHUB_REF_NAME}-production.bin
+          cp artifacts/firmware-esp32-c3-release/firmware.bin \
+             release/modbus-proxy-${GITHUB_REF_NAME}-release.bin
+          cd release && sha256sum *.bin > SHA256SUMS && cat SHA256SUMS
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+          body: |
+            ESP32-C3 firmware for the Modbus proxy, built from `${{ github.sha }}`.
+
+            | Asset | Serial output | Use |
+            |---|---|---|
+            | `modbus-proxy-${{ github.ref_name }}-production.bin` | none | field deployment |
+            | `modbus-proxy-${{ github.ref_name }}-release.bin` | info level | field debugging |
+
+            Flash over the air (device must already be running firmware with the
+            OTA endpoint, and be reachable on your LAN):
+
+            ```bash
+            curl -f -H "Authorization: Bearer <ota-password>" \
+                 -F "firmware=@modbus-proxy-${{ github.ref_name }}-production.bin" \
+                 http://<device-ip>/ota
+            ```
+
+            Verify downloads against `SHA256SUMS`.

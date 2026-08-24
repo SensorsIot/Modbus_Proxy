@@ -1,7 +1,7 @@
 .PHONY: build clean lint
 
 # Default environment for CI builds (no USB required)
-ENV ?= esp32-c3-serial
+ENV ?= esp32-c3-production
 PROJECT_DIR := Modbus_Proxy
 
 build:
