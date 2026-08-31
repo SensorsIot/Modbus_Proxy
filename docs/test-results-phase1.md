@@ -129,5 +129,37 @@ software restart through `uptime`, while TC-000 and WIFI-503 still match
 port.
 
 The empty-password defect is covered by host tests in
-`test/test_wifi_credentials/` (e257e8c). **None of the seven has been re-run on
-hardware** — that needs the DUT and the ESP32 Tester.
+`test/test_wifi_credentials/` (e257e8c).
+
+## Rerun — 2026-08-31
+
+All seven re-run on an ESP32-C3 Supermini in SLOT3 of bench `testbench-b1c2`
+(192.168.0.168), flashed with `esp32-c3-debug` built from the fixes. **All
+seven pass.**
+
+| Test | Result | Evidence |
+|------|--------|----------|
+| WIFI-106 | PASS | Empty password accepted (200, was 500); boot log `WiFi credentials loaded: SSID=MBTEST-OPEN`, associated to the open AP |
+| WIFI-302 | PASS | Empty password against a WPA2 AP → 200, auth fails as required, DUT alive and fell back to `private-2G` |
+| WIFI-303 | PASS | Correct credentials after the bad attempt → recovered onto `MBTEST-WPA2` |
+| WIFI-402 | PASS | `/api/scan` → `{"networks":[…]}`, 10 entries carrying `ssid`/`rssi`/`encrypted` |
+| WIFI-405 | PASS | `Captive portal timeout, restarting...` at ~300 s, followed by the boot banner |
+| CP-102 | PASS | Same restart; `MODBUS-Proxy-Setup` gone from the next scan |
+| WIFI-502 | PASS | `POST /api/wifi` in normal mode → 200 (was 404), rebooted, joined the new AP |
+
+The empty-`ssid` clear path was exercised too: the DUT wiped NVS, rebooted and
+came back on the `credentials.h` network with MQTT connected.
+
+Two notes for whoever runs this next:
+
+- The reboot-detection change holds. `MODBUS PROXY starting` was captured on
+  serial after each software restart, including the portal timeout.
+- `ap_status` reported an empty `stations` list while the DUT was demonstrably
+  associated, which made WIFI-106 look like a failure on the first attempt.
+  Confirm association from the DUT's boot log or through the HTTP relay, not
+  from the station list.
+
+**Portal trigger:** on this bench no Pi GPIO is wired to the DUT's GPIO 2 —
+holding Pi GPIO 17 low left the DUT printing `Portal button (GPIO2): released`,
+and `/api/devices` reports `gpio_wired: null`. The three portal tests needed an
+operator to hold GPIO 2 to GND across the reset. Wire that pin to automate them.
