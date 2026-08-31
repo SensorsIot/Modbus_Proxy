@@ -159,7 +159,14 @@ Two notes for whoever runs this next:
   Confirm association from the DUT's boot log or through the HTTP relay, not
   from the station list.
 
-**Portal trigger:** on this bench no Pi GPIO is wired to the DUT's GPIO 2 —
-holding Pi GPIO 17 low left the DUT printing `Portal button (GPIO2): released`,
-and `/api/devices` reports `gpio_wired: null`. The three portal tests needed an
-operator to hold GPIO 2 to GND across the reset. Wire that pin to automate them.
+**Portal trigger:** the spec's Pi GPIO 17 is not the wired pin — holding it low
+left the DUT printing `Portal button (GPIO2): released`. On this bench **Pi GPIO
+18 drives DUT GPIO 2**, and the three portal tests were re-run through it fully
+unattended (portal triggered, `/api/scan` served, timeout at 305 s, portal AP
+gone from the next scan). The spec and `test/wifi/conftest.py` now say 18.
+
+GPIO 18 is also the slot's `gpio_boot` download-mode strap, so it must be
+released before anything flashes the slot; the fixture already releases it in a
+`finally`. The bench's `/api/gpio/set` accepts pins 16–27 only, and
+`/api/devices` still reports `gpio_wired: null` — the wiring is not
+auto-detected.

@@ -106,7 +106,7 @@ Defined in §3–§13, organized by execution order. Phase 1 covers functional b
 | ESP32-C3 Supermini | Device Under Test (DUT) |
 | Serial Portal Pi | RFC2217 serial server + GPIO control at 192.168.0.87 ([Serial Portal](https://github.com/SensorsIot/Serial-via-Ethernet)) |
 | ESP32 Tester | Pi wlan0 with hostapd/dnsmasq, HTTP-controlled AP at 192.168.0.87:8080 |
-| GPIO wiring | Pi GPIO 17 → DUT GPIO 2 (portal button, active LOW with INPUT_PULLUP) |
+| GPIO wiring | Pi GPIO 18 → DUT GPIO 2 (portal button, active LOW with INPUT_PULLUP). Pi GPIO 18 is also the slot's download-mode strap, so it must not be driven while flashing. |
 | MQTT Broker | Mosquitto on Pi, accessible at 192.168.4.1:1883 via test AP network |
 
 ### 2.1.1 Infrastructure Rules
@@ -291,8 +291,8 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Wait 10s for DUT to fail connecting to fallback SSID (`private-2G`) | DUT in WiFi retry loop (serial shows retry messages) |
-| 2 | Trigger captive portal: `ut.gpio_set(17, 0)` then `ut.serial_reset(SLOT)` | DUT reboots into portal mode |
-| 3 | Release GPIO: `ut.gpio_set(17, "z")` after serial shows `Portal mode` | GPIO released |
+| 2 | Trigger captive portal: `ut.gpio_set(18, 0)` then `ut.serial_reset(SLOT)` | DUT reboots into portal mode |
+| 3 | Release GPIO: `ut.gpio_set(18, "z")` after serial shows `Portal mode` | GPIO released |
 | 4 | Connect to portal AP: `ut.sta_join("MODBUS-Proxy-Setup", "")` | Pi connected to portal AP |
 | 5 | Provision WiFi: POST `http://192.168.4.1/api/wifi` with `{"ssid": SSID, "password": PASS}` | 200 OK |
 | 6 | DUT reboots and connects to test AP: `ut.wait_for_station(timeout=30)` | DUT connected |
@@ -360,8 +360,8 @@ pytest test/wifi/ -v -m captive_portal
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | Trigger captive portal: `ut.gpio_set(17, 0)`, `ut.serial_reset(SLOT)` | Serial output contains `CAPTIVE PORTAL MODE TRIGGERED` |
-| 2 | Release GPIO: `ut.gpio_set(17, "z")` | Pin released to input with pull-up |
+| 1 | Trigger captive portal: `ut.gpio_set(18, 0)`, `ut.serial_reset(SLOT)` | Serial output contains `CAPTIVE PORTAL MODE TRIGGERED` |
+| 2 | Release GPIO: `ut.gpio_set(18, "z")` | Pin released to input with pull-up |
 | 3 | Join portal AP: `ut.sta_join("MODBUS-Proxy-Setup", "modbus-setup")` | Connected to portal AP |
 | 4 | Submit random credentials: `ut.http_post("http://192.168.4.1/api/wifi", json_data={"ssid": SSID, "password": PASS})` | 200 OK |
 | 5 | Leave portal: `ut.sta_leave()` | AP auto-restores |
@@ -740,7 +740,7 @@ These tests verify the captive portal UI, WiFi scanning, provisioning flow, DNS 
 
 **Precondition:**
 - Serial slot idle: `ut.get_slot(SLOT)["state"] == "idle"`
-- DUT in captive portal mode: trigger via `ut.gpio_set(17, 0)` + `ut.serial_reset(SLOT)`, verify serial contains `CAPTIVE PORTAL MODE TRIGGERED`, then `ut.gpio_set(17, "z")`
+- DUT in captive portal mode: trigger via `ut.gpio_set(18, 0)` + `ut.serial_reset(SLOT)`, verify serial contains `CAPTIVE PORTAL MODE TRIGGERED`, then `ut.gpio_set(18, "z")`
 - ESP32 Tester joined portal AP: `ut.sta_join("MODBUS-Proxy-Setup", "modbus-setup")` succeeds
 
 **Tools:** Universal ESP32 Tester
@@ -852,7 +852,7 @@ hardware resets driven by esptool, which holds the port across the reset
 
 **Precondition:**
 - Serial slot idle: `ut.get_slot(SLOT)["state"] == "idle"`
-- GPIO 17 in input with pull-up state: `ut.gpio_set(17, "z")`
+- GPIO 18 in input with pull-up state: `ut.gpio_set(18, "z")`
 
 **Tools:** Universal ESP32 Tester
 
@@ -869,7 +869,7 @@ hardware resets driven by esptool, which holds the port across the reset
 ### CP-101: Captive Portal WiFi Configuration
 
 **Precondition:**
-- DUT in captive portal mode (triggered via GPIO): `ut.gpio_set(17, 0)` + `ut.serial_reset(SLOT)` + `ut.gpio_set(17, "z")`
+- DUT in captive portal mode (triggered via GPIO): `ut.gpio_set(18, 0)` + `ut.serial_reset(SLOT)` + `ut.gpio_set(18, "z")`
 - Portal AP visible: `ut.scan()` shows `MODBUS-Proxy-Setup` SSID
 - Portal AP joinable: `ut.sta_join("MODBUS-Proxy-Setup", "modbus-setup")` succeeds
 
@@ -890,7 +890,7 @@ hardware resets driven by esptool, which holds the port across the reset
 ### CP-102: Captive Portal Timeout
 
 **Precondition:**
-- DUT in captive portal mode (triggered via GPIO): `ut.gpio_set(17, 0)` + `ut.serial_reset(SLOT)` + `ut.gpio_set(17, "z")`
+- DUT in captive portal mode (triggered via GPIO): `ut.gpio_set(18, 0)` + `ut.serial_reset(SLOT)` + `ut.gpio_set(18, "z")`
 - Portal AP visible: `ut.scan()` shows `MODBUS-Proxy-Setup` SSID
 
 **Tools:** Universal ESP32 Tester
@@ -907,7 +907,7 @@ hardware resets driven by esptool, which holds the port across the reset
 **Note:** detect the restart from the portal AP dropping out of a scan, not from
 the ROM boot banner — see the reboot-detection note under WIFI-405.
 
-**Automation:** pytest, ESP32 Tester (GPIO + serial reset). Trigger portal via `ut.gpio_set(17, 0)` + `ut.serial_reset(SLOT)`, release GPIO, wait 5+ minutes, verify DUT restarts (AP disappears, STA reconnects).
+**Automation:** pytest, ESP32 Tester (GPIO + serial reset). Trigger portal via `ut.gpio_set(18, 0)` + `ut.serial_reset(SLOT)`, release GPIO, wait 5+ minutes, verify DUT restarts (AP disappears, STA reconnects).
 
 ## 8. WiFi Credential Management (WIFI-5xx)
 

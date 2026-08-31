@@ -40,8 +40,9 @@ PORTAL_TIMEOUT_S = 300  # CAPTIVE_PORTAL_TIMEOUT_MS / 1000
 # The DUT enters the portal only when GPIO 2 reads LOW at boot (config.h
 # PORTAL_BUTTON_PIN). There is no boot-counter fallback: the proxy stays on one
 # SSID, and only a deliberate action puts it into setup mode. The Pi drives DUT
-# GPIO 2 from its own GPIO 17.
-PORTAL_BUTTON_GPIO = 17
+# GPIO 2 from its own GPIO 18 -- which is also the slot's download-mode strap,
+# so it must be released before anything tries to flash.
+PORTAL_BUTTON_GPIO = 18
 SERIAL_SLOT = int(os.environ.get("DUT_SERIAL_SLOT", "1"))
 PORTAL_BANNER = "CAPTIVE PORTAL MODE TRIGGERED"
 
