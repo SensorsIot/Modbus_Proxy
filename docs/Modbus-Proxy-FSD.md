@@ -679,10 +679,14 @@ Configuration interface for runtime settings.
 {"networks": [{"ssid": "MyNetwork", "rssi": -55, "encrypted": true}]}
 ```
 
-**POST /api/wifi** - Save WiFi credentials (portal mode only):
+**POST /api/wifi** - Save WiFi credentials (portal mode and normal mode):
 ```json
 {"ssid": "MyNetwork", "password": "secret"}
 ```
+The password may be empty for an open network. An empty `ssid` clears the
+stored credentials so the next boot falls back to the compiled-in network in
+`credentials.h`. Either way the device saves to NVS, answers
+`{"status":"ok"}`, and restarts after 1 s.
 
 **POST /api/test/inject** - Inject test DTSU data (debug mode only, returns 403 if debug disabled):
 ```json

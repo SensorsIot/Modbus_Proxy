@@ -131,6 +131,15 @@ void setupNormalRoutes() {
 
   webServer->on("/api/restart", HTTP_POST, handleApiRestart);
 
+  // WiFi credentials: also reachable in normal mode so the device can be moved
+  // to another AP without physical access to the portal button.
+  webServer->on("/api/wifi", HTTP_POST, [](AsyncWebServerRequest *request) {},
+    nullptr,
+    [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+      handleApiWifi(request, data, len);
+    }
+  );
+
   webServer->on("/api/debug", HTTP_POST, [](AsyncWebServerRequest *request) {},
     nullptr,
     [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
@@ -342,14 +351,14 @@ void handleApiWifi(AsyncWebServerRequest *request, uint8_t *data, size_t len) {
   const char* password = doc["password"] | "";
   DEBUG_PRINTF("[WIFI-API] SSID='%s', pass len=%d\n", ssid, (int)strlen(password));
 
-  if (strlen(ssid) == 0) {
-    request->send(400, "application/json", "{\"status\":\"error\",\"message\":\"SSID required\"}");
-    return;
-  }
+  // An empty SSID means "forget the stored network and use the compiled-in
+  // fallback" — that is how a test run hands the device back to its own LAN.
+  bool saved = strlen(ssid) == 0 ? clearWiFiCredentials()
+                                 : saveWiFiCredentials(ssid, password);
 
-  if (saveWiFiCredentials(ssid, password)) {
+  if (saved) {
     request->send(200, "application/json", "{\"status\":\"ok\"}");
-    DEBUG_PRINTLN("WiFi credentials saved via portal, restarting...");
+    DEBUG_PRINTLN("WiFi credentials updated, restarting...");
     delay(1000);
     ESP.restart();
   } else {

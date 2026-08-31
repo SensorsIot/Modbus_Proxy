@@ -767,10 +767,10 @@ These tests verify the captive portal UI, WiFi scanning, provisioning flow, DNS 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Request scan: `ut.http_get("http://192.168.4.1/api/scan")` | 200 OK |
-| 2 | Parse response as JSON | Valid JSON array |
-| 3 | Check array contains at least one network | Each entry has `ssid` and `rssi` fields |
+| 2 | Parse response as JSON | Object with a `networks` key holding an array |
+| 3 | Check `networks` contains at least one entry | Each entry has `ssid`, `rssi` and `encrypted` fields |
 
-**Pass Criteria:** `/api/scan` returns a JSON list of nearby WiFi networks with SSID and RSSI.
+**Pass Criteria:** `/api/scan` returns `{"networks": [...]}` listing nearby WiFi networks with SSID and RSSI.
 
 **Automation:** `pytest test/wifi/test_portal.py::test_wifi_scan -v`
 
@@ -831,9 +831,18 @@ These tests verify the captive portal UI, WiFi scanning, provisioning flow, DNS 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Monitor serial for timeout message: `ut.serial_monitor(SLOT, pattern="Captive portal timeout", timeout=330)` | Pattern matched within ~5 min (300s + margin) |
-| 2 | Monitor serial for reboot: `ut.serial_monitor(SLOT, pattern="SPI_FAST_FLASH_BOOT", timeout=15)` | DUT reboots after timeout |
+| 2 | Monitor serial for the app banner: `ut.serial_monitor(SLOT, pattern="MODBUS PROXY starting", timeout=20)` | DUT reboots after timeout |
 
 **Pass Criteria:** Portal auto-exits and DUT reboots after 5 minutes (300s) of inactivity.
+
+**Note — detecting a software reboot:** the DUT's console is the ESP32-C3 USB
+Serial/JTAG peripheral (`ARDUINO_USB_CDC_ON_BOOT=1`). `ESP.restart()` makes that
+USB device re-enumerate, which drops the RFC2217 session, so the ROM's
+`boot:0xc (SPI_FAST_FLASH_BOOT)` line is usually lost. Match the firmware's own
+banner (printed after `Serial.begin()`) instead, or confirm the restart through
+`/api/status` → `uptime` resetting. `SPI_FAST_FLASH_BOOT` stays valid only for
+hardware resets driven by esptool, which holds the port across the reset
+(TC-000, WIFI-503).
 
 **Automation:** `pytest test/wifi/test_portal.py::test_portal_timeout -v`
 
@@ -890,9 +899,13 @@ These tests verify the captive portal UI, WiFi scanning, provisioning flow, DNS 
 |------|--------|-----------------|
 | 1 | Trigger captive portal mode | AP active |
 | 2 | Do nothing for 5 minutes | Timeout reached |
-| 3 | Device restarts | Attempts normal WiFi connection |
+| 3 | Scan for the portal AP: `ut.scan()` | `MODBUS-Proxy-Setup` gone, or reappeared with a fresh 5-minute window |
+| 4 | Device restarts | Attempts normal WiFi connection |
 
 **Pass Criteria**: Portal doesn't run indefinitely; 5-minute timeout triggers restart.
+
+**Note:** detect the restart from the portal AP dropping out of a scan, not from
+the ROM boot banner — see the reboot-detection note under WIFI-405.
 
 **Automation:** pytest, ESP32 Tester (GPIO + serial reset). Trigger portal via `ut.gpio_set(17, 0)` + `ut.serial_reset(SLOT)`, release GPIO, wait 5+ minutes, verify DUT restarts (AP disappears, STA reconnects).
 
@@ -961,7 +974,7 @@ These tests verify that WiFi credentials are stored in NVS, take priority over c
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | POST new credentials via relay: `ut.http_post("http://<DUT_IP>/api/wifi", json_data={"ssid": SSID2, "password": PASS2})` | 200 OK |
-| 2 | Monitor serial for reboot: `ut.serial_monitor(SLOT, pattern="SPI_FAST_FLASH_BOOT", timeout=15)` | DUT reboots |
+| 2 | Monitor serial for the app banner: `ut.serial_monitor(SLOT, pattern="MODBUS PROXY starting", timeout=20)` | DUT reboots (see the reboot-detection note under WIFI-405) |
 | 3 | Stop old AP, start new AP: `ut.ap_stop()` then `ut.ap_start(SSID2, PASS2)` | New AP active |
 | 4 | Wait for DUT: `ut.wait_for_station(timeout=30)` | DUT connects to new AP |
 | 5 | Verify SSID via relay: `/api/status` → `wifi_ssid` | Matches SSID2 |

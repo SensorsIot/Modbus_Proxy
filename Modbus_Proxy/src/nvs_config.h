@@ -55,6 +55,7 @@ void getDefaultConfig(MQTTConfig& config);
 
 // Function declarations - WiFi credentials
 bool saveWiFiCredentials(const char* ssid, const char* pass);
+bool clearWiFiCredentials();
 bool loadWiFiCredentials(char* ssid, size_t ssidLen, char* pass, size_t passLen);
 bool hasStoredWiFiCredentials();
 

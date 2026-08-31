@@ -9,6 +9,13 @@ bool configLoaded = false;
 // Preferences instance for NVS access
 static Preferences preferences;
 
+// Preferences::putString() returns the number of bytes written, so a
+// successful write of an empty string returns 0. Treating that as failure is
+// what made an open network (empty WiFi password) look like an NVS error.
+static bool putStringChecked(const char* key, const char* value) {
+  return preferences.putString(key, value) == strlen(value);
+}
+
 void getDefaultConfig(MQTTConfig& config) {
   strncpy(config.host, DEFAULT_MQTT_HOST, sizeof(config.host) - 1);
   config.host[sizeof(config.host) - 1] = '\0';
@@ -180,18 +187,34 @@ bool saveWiFiCredentials(const char* ssid, const char* pass) {
     return false;
   }
 
-  bool success = true;
-  success = success && preferences.putString(NVS_KEY_WIFI_SSID, ssid);
-  if (pass) {
-    success = success && preferences.putString(NVS_KEY_WIFI_PASS, pass);
-  } else {
-    success = success && preferences.putString(NVS_KEY_WIFI_PASS, "");
-  }
+  bool success = putStringChecked(NVS_KEY_WIFI_SSID, ssid);
+  success = success && putStringChecked(NVS_KEY_WIFI_PASS, pass ? pass : "");
 
   preferences.end();
 
   if (success) {
-    DEBUG_PRINTF("WiFi credentials saved: SSID=%s\n", ssid);
+    DEBUG_PRINTF("WiFi credentials saved: SSID=%s (pass len=%d)\n",
+                 ssid, pass ? (int)strlen(pass) : 0);
+  }
+
+  return success;
+}
+
+bool clearWiFiCredentials() {
+  if (!preferences.begin(NVS_NAMESPACE, false)) {
+    DEBUG_PRINTLN("Failed to open NVS for clearing WiFi credentials");
+    return false;
+  }
+
+  // An empty SSID is what loadWiFiCredentials() treats as "nothing stored",
+  // so blanking both keys is enough to fall back to credentials.h.
+  bool success = putStringChecked(NVS_KEY_WIFI_SSID, "");
+  success = success && putStringChecked(NVS_KEY_WIFI_PASS, "");
+
+  preferences.end();
+
+  if (success) {
+    DEBUG_PRINTLN("WiFi credentials cleared, falling back to compiled defaults");
   }
 
   return success;
