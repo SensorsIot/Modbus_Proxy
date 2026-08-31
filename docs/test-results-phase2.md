@@ -109,12 +109,25 @@ long-duration).
 
 ## Failure Analysis
 
-| Test | Root Cause | Severity |
-|------|-----------|----------|
-| WIFI-106 | Open network support not implemented in portal AP | Low — WPA2-only is acceptable |
-| WIFI-302 | Empty password for WPA2 causes /api/wifi 500 error and DUT unresponsive state | Medium — needs input validation |
-| WIFI-303 | Cascading failure from WIFI-302 bad state | Medium — blocked by WIFI-302 |
-| WIFI-402 | /api/scan returns object `{"networks":[...]}` instead of bare array `[...]` | Low — functional but unexpected format |
-| WIFI-405 | Portal timeout occurs at ~302s but reboot not detected via serial | Low — timeout works but detection issue |
-| CP-102 | Same as WIFI-405: portal timeout reboot not detected via serial | Low — same root cause |
-| WIFI-502 | /api/wifi endpoint only available in portal mode, not normal mode | Medium — by design, but test spec expects normal mode access |
+Diagnosed and fixed after the run. Behind the failures sit two firmware
+defects, one wrong expectation in this spec, and one reboot-detection method
+the harness cannot observe.
+
+| Test | Root cause | Fix |
+|------|-----------|-----|
+| WIFI-106 | Not an open-network gap. `Preferences::putString()` returns the byte count written, so an empty password returned 0 and `saveWiFiCredentials()` reported failure; `/api/wifi` answered 500 and skipped its reboot. An open network *is* an empty password. | `putStringChecked()` compares against `strlen()` (185b6a9) |
+| WIFI-302 | Same defect: empty password read as an NVS write failure, leaving the SSID stored and the DUT sitting in portal mode. | 185b6a9 |
+| WIFI-303 | Cascade from WIFI-302 — the DUT was still stranded from the previous case. | Resolved with WIFI-302 |
+| WIFI-402 | Spec defect. The firmware, the FSD and `test_captive_portal.py` all use `{"networks":[...]}`; only this spec demanded a bare array. | Spec corrected to match (185b6a9) |
+| WIFI-405 | Not a timeout defect. The timeout fires and the restart works; the *detection* cannot. The console is USB Serial/JTAG (`ARDUINO_USB_CDC_ON_BOOT=1`), so `ESP.restart()` re-enumerates the USB device and drops the RFC2217 session before the ROM prints `SPI_FAST_FLASH_BOOT`. | Step matches the firmware banner instead (185b6a9) |
+| CP-102 | Same as WIFI-405. | Detects the portal AP dropping out of a scan (185b6a9) |
+| WIFI-502 | `/api/wifi` was registered only on the portal routes, so it answered 404 in normal mode. | Served in both modes; an empty `ssid` now clears NVS (185b6a9) |
+
+Corroborating evidence for WIFI-405/CP-102: WEB-108 passed detecting the same
+software restart through `uptime`, while TC-000 and WIFI-503 still match
+`SPI_FAST_FLASH_BOOT` because esptool drives a hardware reset while holding the
+port.
+
+The empty-password defect is covered by host tests in
+`test/test_wifi_credentials/` (e257e8c). **None of the seven has been re-run on
+hardware** — that needs the DUT and the ESP32 Tester.
