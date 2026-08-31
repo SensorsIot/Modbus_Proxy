@@ -100,10 +100,19 @@ class TestAPDropout:
         with pytest.raises(Exception):
             esp32_tester.wait_for_station(timeout=15)
 
-        # Cleanup: restore original AP
+        # Cleanup: restore the original AP. The DUT gave up on the test SSID
+        # and fell back to credentials.h, so it has to be told to come back --
+        # it will not retry the test network on its own.
         esp32_tester.ap_stop()
         esp32_tester.ap_start(dut_on_test_ap["ssid"], dut_on_test_ap["password"])
-        esp32_tester.wait_for_station(timeout=60)
+        from conftest import _provision_dut_wifi, _wait_for_dut_on_production
+        import os
+        _wait_for_dut_on_production(
+            f"http://{os.environ.get('DUT_IP', '192.168.0.177')}", timeout=120)
+        _provision_dut_wifi(
+            f"http://{os.environ.get('DUT_IP', '192.168.0.177')}",
+            dut_on_test_ap["ssid"], dut_on_test_ap["password"])
+        esp32_tester.wait_for_station(timeout=90)
 
     def test_multiple_dropout_cycles(self, dut_on_test_ap, esp32_tester):
         """WIFI-205: DUT reconnects through 5 dropout cycles, heap stays stable."""

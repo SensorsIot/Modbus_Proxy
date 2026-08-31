@@ -135,7 +135,12 @@ const uint32_t MQTT_DOWN_REBOOT_MS = 600000;  // 10 minutes
 #define CAPTIVE_PORTAL_IP IPAddress(192, 168, 4, 1)
 #define CAPTIVE_PORTAL_GATEWAY IPAddress(192, 168, 4, 1)
 #define CAPTIVE_PORTAL_SUBNET IPAddress(255, 255, 255, 0)
-#define CAPTIVE_PORTAL_TIMEOUT_MS 300000  // 5 minutes
+// 5 minutes. Overridable at build time so a bench can prove the timeout
+// mechanism in seconds instead of sitting out the production value; see the
+// esp32-c3-benchtest environment in platformio.ini.
+#ifndef CAPTIVE_PORTAL_TIMEOUT_MS
+#define CAPTIVE_PORTAL_TIMEOUT_MS 300000
+#endif
 #define WIFI_HOSTNAME "MODBUS-Proxy"
 #define WIFI_CONNECT_TIMEOUT_MS 30000     // 30 seconds
 #define WIFI_MQTT_RECOVERY_TIMEOUT_MS 60000  // 60 seconds - restart if no WiFi/MQTT

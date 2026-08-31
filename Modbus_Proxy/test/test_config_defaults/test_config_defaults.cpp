@@ -72,6 +72,12 @@ void test_min_free_heap(void) {
   TEST_ASSERT_EQUAL_UINT32(20000, MIN_FREE_HEAP);
 }
 
+// The bench shortens this with -DCAPTIVE_PORTAL_TIMEOUT_MS so the timeout can
+// be tested in seconds. This pins the value every other build ships with.
+void test_captive_portal_timeout(void) {
+  TEST_ASSERT_EQUAL_UINT32(300000, CAPTIVE_PORTAL_TIMEOUT_MS);
+}
+
 void setUp(void) {}
 void tearDown(void) {}
 
@@ -90,6 +96,7 @@ int main(int argc, char** argv) {
   RUN_TEST(test_wallbox_max_age);
   RUN_TEST(test_watchdog_timeout);
   RUN_TEST(test_min_free_heap);
+  RUN_TEST(test_captive_portal_timeout);
 
   return UNITY_END();
 }

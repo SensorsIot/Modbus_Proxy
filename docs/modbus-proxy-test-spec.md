@@ -163,6 +163,27 @@ Helper libraries (not tools themselves): pytest, paho-mqtt, requests, pyserial, 
 | `MBUS-PROXY/health` | Publish | System health status |
 | `MBUS-PROXY/log` | Publish | Log events |
 
+**None of these topics carries a device id.** Every proxy on a broker sees every
+other proxy's traffic, so running the MQTT tests against the production broker
+(192.168.0.203) drives the *deployed* unit as well as the DUT: `test_mqtt.py`
+publishes wallbox power up to 7400 W and changes the log level, and the deployed
+proxy applies both. `test/integration/conftest.py` defaults to that broker and
+to the deployed device at 192.168.0.177.
+
+Point both at test hardware before running anything:
+
+```bash
+curl -X POST $WORKBENCH_URL/api/mqtt/start          # bench mosquitto, port 1883
+curl -X POST http://<dut>/api/config -H 'Content-Type: application/json' \
+  -d '{"type":"mqtt","host":"<bench-ip>","port":1883,"user":"admin","pass":"admin"}'
+
+DEVICE_IP=<dut> MQTT_BROKER=<bench-ip> pytest test/integration -q
+```
+
+A DUT on the bench AP reaches the broker at the AP gateway; a DUT on the LAN
+reaches it at the bench's LAN address. Read the address from
+`/api/wifi/ap_status` rather than assuming.
+
 ### 2.4 Automated Test Coverage
 
 #### Unit Tests (unit-test env, no hardware required)

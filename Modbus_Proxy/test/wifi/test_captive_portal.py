@@ -7,9 +7,11 @@ provisioning flow. Each portal activation costs one GPIO-triggered reboot.
 import time
 
 import pytest
+import requests
 
 from conftest import (
     PORTAL_IP,
+    PORTAL_PASS,
     PORTAL_SSID,
     PORTAL_TIMEOUT_S,
 )
@@ -37,12 +39,10 @@ class TestCaptivePortalActivation:
         assert resp.status_code == 200
         assert resp.json()["wifi_connected"] is True
 
-        # Portal SSID should NOT be visible
-        scan_result = esp32_tester.scan()
-        portal_found = any(
-            n["ssid"] == PORTAL_SSID for n in scan_result.get("networks", [])
-        )
-        assert not portal_found
+        # No scan here: the bench has a single radio and answers 503 while its
+        # own AP is running. Being associated to the test AP and reporting
+        # wifi_connected already proves the DUT is not serving its portal --
+        # portal mode never joins a network.
 
 
 class TestCaptivePortalPages:
@@ -50,7 +50,7 @@ class TestCaptivePortalPages:
 
     def test_portal_page_accessible(self, dut_in_portal_mode, esp32_tester):
         """WIFI-401: Portal main page is served over HTTP."""
-        esp32_tester.sta_join(dut_in_portal_mode, timeout=10)
+        esp32_tester.sta_join(dut_in_portal_mode, PORTAL_PASS, timeout=10)
         try:
             resp = esp32_tester.http_get(f"http://{PORTAL_IP}/")
             assert resp.status_code == 200
@@ -60,7 +60,7 @@ class TestCaptivePortalPages:
 
     def test_wifi_scan_endpoint(self, dut_in_portal_mode, esp32_tester):
         """WIFI-402: /api/scan returns visible networks in portal mode."""
-        esp32_tester.sta_join(dut_in_portal_mode, timeout=10)
+        esp32_tester.sta_join(dut_in_portal_mode, PORTAL_PASS, timeout=10)
         try:
             resp = esp32_tester.http_get(f"http://{PORTAL_IP}/api/scan")
             assert resp.status_code == 200
@@ -72,7 +72,7 @@ class TestCaptivePortalPages:
 
     def test_portal_dns_redirect(self, dut_in_portal_mode, esp32_tester):
         """WIFI-404: DNS redirect sends all requests to portal page."""
-        esp32_tester.sta_join(dut_in_portal_mode, timeout=10)
+        esp32_tester.sta_join(dut_in_portal_mode, PORTAL_PASS, timeout=10)
         try:
             # Request a captive portal detection URL
             resp = esp32_tester.http_get(f"http://{PORTAL_IP}/generate_204")
@@ -91,7 +91,7 @@ class TestCaptivePortalProvisioning:
         target_pass = "portal_test_123"
 
         # Join the DUT's portal AP
-        esp32_tester.sta_join(dut_in_portal_mode, timeout=10)
+        esp32_tester.sta_join(dut_in_portal_mode, PORTAL_PASS, timeout=10)
 
         # Submit new WiFi credentials through the portal
         resp = esp32_tester.http_post(
@@ -127,23 +127,32 @@ class TestCaptivePortalProvisioning:
 class TestCaptivePortalTimeout:
     """WIFI-405: Portal timeout."""
 
-    @pytest.mark.timeout(PORTAL_TIMEOUT_S + 60)
-    def test_portal_timeout(self, dut_in_portal_mode, esp32_tester):
-        """WIFI-405: Portal times out after 5 minutes and DUT reboots."""
-        # Portal is active — wait for timeout
-        # The portal should disappear after PORTAL_TIMEOUT_S
-        print(f"Waiting {PORTAL_TIMEOUT_S + 10}s for portal timeout...")
-        time.sleep(PORTAL_TIMEOUT_S + 10)
+    # Covers the portal timeout, the poll past it, and the fixture's own
+    # GPIO-trigger + reset + scan-confirm before the test body starts.
+    @pytest.mark.timeout(PORTAL_TIMEOUT_S + 300)
+    def test_portal_timeout(self, dut_in_portal_mode, dut_production_url):
+        """WIFI-405 / CP-102: portal times out and the DUT reboots onto WiFi.
 
-        # After timeout, DUT reboots. Portal SSID should disappear
-        # (briefly, then may reappear if DUT re-enters portal)
-        scan_result = esp32_tester.scan()
-        # The DUT has rebooted — it may or may not be back in portal
-        # depending on whether WiFi succeeds. The key assertion is that
-        # the portal DID restart (proving timeout worked).
-        # We verify by checking the portal reappeared with a fresh timeout.
-        portal_found = any(
-            n["ssid"] == PORTAL_SSID for n in scan_result.get("networks", [])
+        Asserted on the consequence, not on the serial announcement: this
+        console drops lines, and a timeout message that was printed and lost
+        cannot be told from one never printed. The DUT answering on its own
+        network proves both halves -- the portal exited and the device
+        restarted. It does not re-enter the portal, because only the GPIO 2
+        button opens it.
+
+        Set PORTAL_TIMEOUT_S to match the firmware under test; the
+        esp32-c3-benchtest build shortens it to 20s.
+        """
+        deadline = time.time() + PORTAL_TIMEOUT_S + 90
+        while time.time() < deadline:
+            try:
+                if requests.get(f"{dut_production_url}/api/status",
+                                timeout=3).status_code == 200:
+                    return
+            except requests.exceptions.RequestException:
+                pass
+            time.sleep(2)
+        pytest.fail(
+            f"DUT never left the portal: not reachable on its own network "
+            f"within {PORTAL_TIMEOUT_S + 90}s of the portal opening"
         )
-        # Portal should reappear (DUT still has bad creds, so it re-enters portal)
-        assert portal_found, "Portal did not reappear after timeout reboot"

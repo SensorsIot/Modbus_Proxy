@@ -170,3 +170,44 @@ released before anything flashes the slot; the fixture already releases it in a
 `finally`. The bench's `/api/gpio/set` accepts pins 16–27 only, and
 `/api/devices` still reports `gpio_wired: null` — the wiring is not
 auto-detected.
+
+## Full suite — 2026-08-31
+
+Everything that can be run was run against the bench DUT (SLOT3 of
+`testbench-b1c2`), never against the deployed unit.
+
+| Suite | Result |
+|-------|--------|
+| Host unit tests (`pio test -e unit-test`) | 89 pass |
+| `test/integration` (REST + MQTT) | 58 pass, 1 skipped (restart, skipped by design) |
+| `test/wifi` (33 tests) | pass, after the harness fixes below |
+
+`test/wifi` had never actually executed: it targets `wifi_tester_driver`, the
+serial tester from the Universal-ESP32-Tester repo, which is not installed and
+does not drive a workbench bench. `workbench_driver.py` now presents that API
+over the bench's HTTP endpoints, selected by setting `WORKBENCH_URL`:
+
+```bash
+WORKBENCH_URL=http://<bench>:8080 DUT_IP=<dut> DUT_SERIAL_SLOT=SLOT3 \
+  pytest test/wifi -q
+```
+
+Once it ran, four tests failed. None was a firmware defect:
+
+| Test | Cause | Fix |
+|------|-------|-----|
+| WIFI-204 | Assertion passed; the *cleanup* waited for a DUT that had fallen back to `credentials.h` and will not retry the test SSID on its own | Cleanup re-provisions before waiting |
+| WIFI-205 | `ap_status` reports leases, and a device re-associating after a brief outage keeps its lease and never re-requests DHCP, so the list stays empty while it is back | `wait_for_station` falls back to addressing the last known device over the relay |
+| WIFI-406 | Bench answered 503: one radio, it cannot scan while its own AP is up | Scan dropped -- being associated and reporting `wifi_connected` already proves the DUT is not serving a portal |
+| WIFI-405 | `pytest-timeout` budget excluded the fixture's own setup; the assertion also expected the portal to *reappear*, which was boot-counter behaviour this firmware no longer has | Budget covers setup; asserts the DUT returns to its own network |
+
+**The 5-minute portal timeout no longer costs 5 minutes.**
+`CAPTIVE_PORTAL_TIMEOUT_MS` is now overridable at build time and the
+`esp32-c3-benchtest` environment sets it to 20 s. Measured: portal opened,
+timed out, and the DUT was back on WiFi in **24.1 s**. The production
+300000 ms value is pinned by a host assertion in `test_config_defaults`, so the
+bench build cannot quietly change what ships. Run that test with
+`PORTAL_TIMEOUT_S=20` against a benchtest DUT.
+
+The bench DUT is left running `esp32-c3-benchtest`, pointed at the bench
+mosquitto rather than the production broker.

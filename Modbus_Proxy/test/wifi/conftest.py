@@ -20,11 +20,15 @@ import uuid
 import pytest
 import requests
 
-# Import will fail until wifi_tester_driver is installed from the Universal-ESP32-Tester repo
+# The serial tester driver ships with the Universal-ESP32-Tester repo. A
+# workbench bench exposes the same instruments over HTTP instead, so fall back
+# to the adapter when WORKBENCH_URL is set.
 try:
     from wifi_tester_driver import WiFiTesterDriver as ESP32TesterDriver
 except ImportError:
     ESP32TesterDriver = None
+
+from workbench_driver import WorkbenchDriver
 
 
 # ---------------------------------------------------------------------------
@@ -33,9 +37,12 @@ except ImportError:
 
 # DUT captive portal settings (must match config.h)
 PORTAL_SSID = "MODBUS-Proxy-Setup"
+PORTAL_PASS = "modbus-setup"  # config.h CAPTIVE_PORTAL_PASS
 PORTAL_IP = "192.168.4.1"
 WIFI_CONNECT_TIMEOUT = 30  # DUT's WIFI_CONNECT_TIMEOUT_MS / 1000
-PORTAL_TIMEOUT_S = 300  # CAPTIVE_PORTAL_TIMEOUT_MS / 1000
+# CAPTIVE_PORTAL_TIMEOUT_MS / 1000. Set PORTAL_TIMEOUT_S=20 when the DUT runs
+# the esp32-c3-benchtest build, which shortens it.
+PORTAL_TIMEOUT_S = int(os.environ.get("PORTAL_TIMEOUT_S", "300"))
 
 # The DUT enters the portal only when GPIO 2 reads LOW at boot (config.h
 # PORTAL_BUTTON_PIN). There is no boot-counter fallback: the proxy stays on one
@@ -43,7 +50,7 @@ PORTAL_TIMEOUT_S = 300  # CAPTIVE_PORTAL_TIMEOUT_MS / 1000
 # GPIO 2 from its own GPIO 18 -- which is also the slot's download-mode strap,
 # so it must be released before anything tries to flash.
 PORTAL_BUTTON_GPIO = 18
-SERIAL_SLOT = int(os.environ.get("DUT_SERIAL_SLOT", "1"))
+SERIAL_SLOT = os.environ.get("DUT_SERIAL_SLOT", "SLOT1")
 PORTAL_BANNER = "CAPTIVE PORTAL MODE TRIGGERED"
 
 # Test timing
@@ -58,14 +65,16 @@ DUT_BOOT_TIME = 15  # seconds from reboot to WiFi connected
 @pytest.fixture(scope="session")
 def esp32_tester():
     """Session-scoped connection to the Universal ESP32 Tester instrument."""
-    if ESP32TesterDriver is None:
+    bench_url = os.environ.get("WORKBENCH_URL")
+    if bench_url:
+        driver = WorkbenchDriver(bench_url, slot=SERIAL_SLOT)
+    elif ESP32TesterDriver is not None:
+        driver = ESP32TesterDriver(os.environ.get("ESP32_TESTER_PORT", "/dev/ttyACM0"))
+    else:
         pytest.skip(
-            "wifi_tester_driver not installed. "
-            "Install from Universal-ESP32-Tester repo: pip install -e <path>/pytest"
+            "No tester available. Set WORKBENCH_URL for a workbench bench, or "
+            "install wifi_tester_driver from the Universal-ESP32-Tester repo."
         )
-
-    port = os.environ.get("ESP32_TESTER_PORT", "/dev/ttyACM0")
-    driver = ESP32TesterDriver(port)
     driver.open()
 
     info = driver.ping()
@@ -169,12 +178,9 @@ def dut_on_test_ap(esp32_tester, wifi_network, dut_production_url):
 
     On teardown, restores DUT to production network credentials.
     """
-    # Record original SSID for restore
-    try:
-        original_status = _get_dut_status(dut_production_url)
-        original_ssid = original_status.get("wifi_ssid", "")
-    except Exception:
-        original_ssid = ""
+    # The previous test may still be handing the DUT back, so wait for it to be
+    # reachable rather than assuming it already is.
+    _wait_for_dut_on_production(dut_production_url, timeout=120)
 
     # Tell DUT to connect to test AP (DUT reboots)
     _provision_dut_wifi(
@@ -193,18 +199,18 @@ def dut_on_test_ap(esp32_tester, wifi_network, dut_production_url):
         "password": wifi_network["password"],
     }
 
-    # Restore: tell DUT to go back to production network
+    # Restore: an empty ssid clears NVS and reboots onto credentials.h.
     try:
         esp32_tester.http_post(
             f"http://{dut_ip}/api/wifi",
-            json={"ssid": original_ssid, "password": ""},
+            json={"ssid": "", "password": ""},
         )
     except Exception:
         pass
 
     # Wait for DUT to reappear on production network
     try:
-        _wait_for_dut_on_production(dut_production_url, timeout=60)
+        _wait_for_dut_on_production(dut_production_url, timeout=120)
     except TimeoutError:
         # DUT will eventually fall back to credentials.h
         pass
@@ -290,7 +296,7 @@ def dut_in_portal_mode(esp32_tester, dut_production_url):
 
     # Teardown: an empty ssid clears NVS and reboots onto credentials.h.
     try:
-        esp32_tester.sta_join(PORTAL_SSID, timeout=10)
+        esp32_tester.sta_join(PORTAL_SSID, PORTAL_PASS, timeout=10)
         esp32_tester.http_post(
             f"http://{PORTAL_IP}/api/wifi",
             json={"ssid": "", "password": ""},
