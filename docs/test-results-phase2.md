@@ -15,12 +15,16 @@
 
 | Result | Count |
 |--------|-------|
-| PASS | 60 |
-| FAIL | 8 |
+| PASS | 63 |
+| FAIL | 7 |
 | SKIP | 0 |
-| Total | 68 |
+| Scored total | 70 |
 
-**Note:** 6 tests from the 74-test plan are not included: TC-000/TC-001/TC-002 are setup procedures (not scored), EC-113/EC-114/EC-115 are code-review-only tests.
+Counts cover the scored tests only. The table below has 73 rows: the 3 setup
+procedures (TC-000/TC-001/TC-002) run and pass but are not scored, leaving 70.
+
+**Not included:** EC-113/EC-114/EC-115 are code-review-only, and LD-001–LD-003
+are the Phase 2 long-duration tests, which this run did not cover.
 
 ## Results
 
