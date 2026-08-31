@@ -13,18 +13,11 @@
 
 ## Summary
 
-| Result | Count |
-|--------|-------|
-| PASS | 63 |
-| FAIL | 7 |
-| SKIP | 0 |
-| Scored total | 70 |
+Seven tests failed: WIFI-106, WIFI-302, WIFI-303, WIFI-402, WIFI-405, CP-102
+and WIFI-502. Everything else in the table below passed.
 
-Counts cover the scored tests only. The table below has 73 rows: the 3 setup
-procedures (TC-000/TC-001/TC-002) run and pass but are not scored, leaving 70.
-
-**Not included:** EC-113/EC-114/EC-115 are code-review-only, and LD-001–LD-003
-are the Phase 2 long-duration tests, which this run did not cover.
+**Not run:** EC-113/EC-114/EC-115 (code review only) and LD-001–LD-003 (Phase 2
+long-duration).
 
 ## Results
 

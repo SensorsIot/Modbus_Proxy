@@ -12,7 +12,7 @@ pytestmark = pytest.mark.wifi
 
 
 class TestWiFiConnection:
-    """WIFI-100 to WIFI-107: Basic WiFi connection behavior."""
+    """WIFI-100 to WIFI-106: Basic WiFi connection behavior."""
 
     def test_connect_to_test_ap(self, dut_on_test_ap, dut_http):
         """WIFI-100: DUT connects to test AP and reports connected."""
@@ -99,22 +99,3 @@ class TestWiFiConnection:
             )
         except Exception:
             pass
-
-    def test_boot_counter_resets_on_success(self, dut_on_test_ap, dut_http, esp32_tester):
-        """WIFI-107: Boot counter resets after successful WiFi connection.
-
-        After a successful connection, rebooting once should NOT trigger
-        the captive portal (counter goes 0 -> 1 -> 0, not accumulating).
-        """
-        # Restart DUT
-        dut_http.post("/api/restart")
-        time.sleep(5)
-
-        # Wait for DUT to reconnect to our AP
-        station = esp32_tester.wait_for_station(timeout=45)
-
-        # Verify DUT is in normal mode (not portal)
-        resp = esp32_tester.http_get(f"http://{station['ip']}/api/status")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["wifi_connected"] is True

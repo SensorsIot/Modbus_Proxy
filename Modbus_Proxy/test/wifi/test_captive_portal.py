@@ -1,7 +1,7 @@
 """WIFI-4xx: Captive Portal Tests.
 
 Verify the DUT's captive portal activation, page serving, and full
-provisioning flow. These tests are slow (~90s per portal activation).
+provisioning flow. Each portal activation costs one GPIO-triggered reboot.
 """
 
 import time
@@ -19,25 +19,13 @@ pytestmark = [pytest.mark.wifi, pytest.mark.captive_portal]
 
 
 class TestCaptivePortalActivation:
-    """WIFI-400, WIFI-406: Portal activation and non-activation."""
-
-    def test_portal_activates_after_3_failed_boots(
-        self, dut_in_portal_mode, esp32_tester
-    ):
-        """WIFI-400: Portal AP appears after 3 failed WiFi boots."""
-        scan_result = esp32_tester.scan()
-        portal_ssids = [
-            n["ssid"]
-            for n in scan_result.get("networks", [])
-            if n["ssid"] == PORTAL_SSID
-        ]
-        assert len(portal_ssids) == 1
+    """WIFI-406: Portal is not entered without the button."""
 
     def test_normal_boot_does_not_trigger_portal(
         self, dut_on_test_ap, dut_http, esp32_tester
     ):
-        """WIFI-406: A single reboot does NOT trigger the portal."""
-        # Reboot DUT (boot counter goes 0 -> 1)
+        """WIFI-406: A reboot without the portal button does NOT open it."""
+        # Reboot with GPIO 2 left floating (pulled up)
         dut_http.post("/api/restart")
         time.sleep(5)
 

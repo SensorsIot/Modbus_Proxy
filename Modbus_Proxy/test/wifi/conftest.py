@@ -35,12 +35,18 @@ except ImportError:
 PORTAL_SSID = "MODBUS-Proxy-Setup"
 PORTAL_IP = "192.168.4.1"
 WIFI_CONNECT_TIMEOUT = 30  # DUT's WIFI_CONNECT_TIMEOUT_MS / 1000
-PORTAL_BOOT_THRESHOLD = 3  # reboots needed to trigger portal
 PORTAL_TIMEOUT_S = 300  # CAPTIVE_PORTAL_TIMEOUT_MS / 1000
+
+# The DUT enters the portal only when GPIO 2 reads LOW at boot (config.h
+# PORTAL_BUTTON_PIN). There is no boot-counter fallback: the proxy stays on one
+# SSID, and only a deliberate action puts it into setup mode. The Pi drives DUT
+# GPIO 2 from its own GPIO 17.
+PORTAL_BUTTON_GPIO = 17
+SERIAL_SLOT = int(os.environ.get("DUT_SERIAL_SLOT", "1"))
+PORTAL_BANNER = "CAPTIVE PORTAL MODE TRIGGERED"
 
 # Test timing
 DUT_BOOT_TIME = 15  # seconds from reboot to WiFi connected
-FAILED_BOOT_CYCLE = WIFI_CONNECT_TIMEOUT + 5  # one failed boot cycle
 
 
 # ---------------------------------------------------------------------------
@@ -238,62 +244,60 @@ def dut_http(esp32_tester, dut_on_test_ap):
 
 
 @pytest.fixture
-def dut_in_portal_mode(esp32_tester, wifi_network, dut_production_url):
-    """Trigger the DUT's captive portal mode by causing 3 failed WiFi boots.
+def dut_in_portal_mode(esp32_tester, dut_production_url):
+    """Put the DUT into captive portal mode by holding its portal button.
 
-    Prerequisites: DUT is currently on production network.
-
-    Steps:
-        1. Provision DUT with test AP's SSID (but AP is stopped)
-        2. DUT reboots and fails WiFi 3 times
-        3. DUT enters captive portal mode
+    The firmware enters the portal only when GPIO 2 reads LOW during boot, so
+    the tester pulls GPIO 17 low, resets the DUT over serial, waits for the
+    portal banner, then releases the pin. Failing to reach an AP never opens
+    the portal -- the DUT retries and reboots instead.
 
     Yields the portal SSID.
 
-    On teardown, waits for portal timeout or restores DUT via portal.
+    On teardown, clears the DUT's stored credentials so it returns to the
+    network compiled into credentials.h.
     """
-    # Stop AP so DUT's WiFi will fail
-    esp32_tester.ap_stop()
+    for call in ("gpio_set", "serial_reset", "serial_monitor"):
+        if not hasattr(esp32_tester, call):
+            pytest.skip(
+                f"Tester driver has no {call}(); the portal can only be "
+                "triggered through the DUT's GPIO 2 button."
+            )
 
-    # Provision DUT with our SSID — DUT will reboot and fail
-    _provision_dut_wifi(
-        dut_production_url,
-        wifi_network["ssid"],
-        wifi_network["password"],
-    )
+    esp32_tester.gpio_set(PORTAL_BUTTON_GPIO, 0)
+    try:
+        esp32_tester.serial_reset(SERIAL_SLOT)
+        esp32_tester.serial_monitor(SERIAL_SLOT, pattern=PORTAL_BANNER, timeout=30)
+    finally:
+        esp32_tester.gpio_set(PORTAL_BUTTON_GPIO, "z")
 
-    # Wait for 3 failed boot cycles
-    # Each cycle: ~30s WiFi timeout + ~5s boot overhead
-    wait_time = FAILED_BOOT_CYCLE * PORTAL_BOOT_THRESHOLD + 10
-    print(f"Waiting {wait_time}s for {PORTAL_BOOT_THRESHOLD} failed boot cycles...")
-    time.sleep(wait_time)
-
-    # Verify portal AP is broadcasting
-    scan_result = esp32_tester.scan()
-    portal_found = any(
-        n["ssid"] == PORTAL_SSID for n in scan_result.get("networks", [])
-    )
-    if not portal_found:
+    # Confirm the portal AP is broadcasting before handing over to the test.
+    deadline = time.time() + 20
+    while time.time() < deadline:
+        networks = esp32_tester.scan().get("networks", [])
+        if any(n["ssid"] == PORTAL_SSID for n in networks):
+            break
+        time.sleep(2)
+    else:
+        visible = [n["ssid"] for n in esp32_tester.scan().get("networks", [])]
         pytest.fail(
-            f"Portal SSID '{PORTAL_SSID}' not found in scan after "
-            f"{PORTAL_BOOT_THRESHOLD} failed boots. "
-            f"Visible networks: {[n['ssid'] for n in scan_result.get('networks', [])]}"
+            f"Portal SSID '{PORTAL_SSID}' not broadcasting after a "
+            f"GPIO-triggered boot. Visible networks: {visible}"
         )
 
     yield PORTAL_SSID
 
-    # Teardown: provision DUT back to production via the portal
+    # Teardown: an empty ssid clears NVS and reboots onto credentials.h.
     try:
         esp32_tester.sta_join(PORTAL_SSID, timeout=10)
         esp32_tester.http_post(
             f"http://{PORTAL_IP}/api/wifi",
-            json={"ssid": "", "password": ""},  # empty = use credentials.h fallback
+            json={"ssid": "", "password": ""},
         )
         esp32_tester.sta_leave()
     except Exception:
         pass
 
-    # Wait for DUT to come back on production (portal timeout is 5 min max)
     try:
         _wait_for_dut_on_production(dut_production_url, timeout=PORTAL_TIMEOUT_S + 30)
     except TimeoutError:
