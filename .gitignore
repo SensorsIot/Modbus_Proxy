@@ -1,6 +1,7 @@
 .claude/*
 !.claude/skills/
 !.claude/commands/
+.claude-data/
 # PlatformIO
 .pio/
 .pioenvs/

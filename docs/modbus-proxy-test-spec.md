@@ -103,7 +103,7 @@ Defined in §3–§13, organized by execution order. Phase 1 covers functional b
 
 | Component | Description |
 |-----------|-------------|
-| ESP32-C3 DevKit | Device Under Test (DUT) |
+| ESP32-C3 Supermini | Device Under Test (DUT) |
 | Serial Portal Pi | RFC2217 serial server + GPIO control at 192.168.0.87 ([Serial Portal](https://github.com/SensorsIot/Serial-via-Ethernet)) |
 | ESP32 Tester | Pi wlan0 with hostapd/dnsmasq, HTTP-controlled AP at 192.168.0.87:8080 |
 | GPIO wiring | Pi GPIO 17 → DUT GPIO 2 (portal button, active LOW with INPUT_PULLUP) |
@@ -144,18 +144,13 @@ This state is established by TC-000 (flash + NVS erase) and TC-001 (captive port
 
 ### 2.2 Test Tools
 
-| Tool | Purpose |
-|------|---------|
-| mosquitto_pub/sub | MQTT message injection and monitoring |
-| PlatformIO | Firmware build and flash |
-| PlatformIO unit-test | Host-side unit test runner (`pio test -e unit-test`) |
-| Unity (C) | Unit test framework for unit tests |
-| pytest | Python integration test framework |
-| paho-mqtt | Python MQTT client for integration tests |
-| requests | Python HTTP client for REST API and OTA tests |
-| pyserial (RFC2217) | Remote serial control via `rfc2217://192.168.0.87:4003` for device reset/power cycle |
-| ESP32 Tester driver | HTTP-controlled AP: start/stop AP, scan, HTTP relay, station events, GPIO control |
-| SSH (subprocess) | Remote broker restart (`systemctl stop/start mosquitto`) for disconnect tests |
+| Tool | What it provides | Tests |
+|------|-----------------|-------|
+| PlatformIO | Build, flash, host-side unit test runner (Unity/C) | 77 unit tests |
+| Universal ESP32 Tester | Pi test instrument: WiFi AP, serial reset/flash, GPIO button, mosquitto broker, mosquitto_pub/sub | 35 WiFi tests (`test-wifi`) |
+| Home network | Production MQTT broker (192.168.0.203), DUT at 192.168.0.177, mosquitto_pub/sub | 59 integration tests (`test-wallbox`) |
+
+Helper libraries (not tools themselves): pytest, paho-mqtt, requests, pyserial, Unity.
 
 ### 2.3 MQTT Topics
 
@@ -249,6 +244,8 @@ These run first, in order, to establish and verify the clean DUT state before an
 - Build artifacts exist: `bootloader.bin`, `partitions.bin`, `firmware.bin` in `.pio/build/esp32-c3-debug/`
 - Firmware built with `esp32-c3-debug` environment (`SERIAL_DEBUG_LEVEL=2`)
 
+**Tools:** PlatformIO, Universal ESP32 Tester
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Build firmware: `pio run -e esp32-c3-debug` | Build succeeds |
@@ -289,6 +286,8 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 - MQTT broker on Pi: `mosquitto_pub -h 192.168.4.1 -u admin -P admin -t test -m ok` succeeds
 - Serial slot idle: `ut.get_slot(SLOT)["state"] == "idle"`
 
+**Tools:** Universal ESP32 Tester
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Wait 10s for DUT to fail connecting to fallback SSID (`private-2G`) | DUT in WiFi retry loop (serial shows retry messages) |
@@ -311,6 +310,8 @@ $ESPTOOL --port $PORT --chip esp32c3 --baud 921600 \
 **Precondition:**
 - TC-001 passed (DUT provisioned on test AP, MQTT connected to Pi broker)
 - DUT reachable via relay: `ut.http_get("http://<DUT_IP>/api/status")` → 200
+
+**Tools:** Universal ESP32 Tester
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -355,6 +356,8 @@ pytest test/wifi/ -v -m captive_portal
 - ESP32 Tester AP stopped: `ut.ap_status()["active"] == False`
 - Generate random SSID and password for this test run
 
+**Tools:** Universal ESP32 Tester
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Trigger captive portal: `ut.gpio_set(17, 0)`, `ut.serial_reset(SLOT)` | Serial output contains `CAPTIVE PORTAL MODE TRIGGERED` |
@@ -377,6 +380,8 @@ pytest test/wifi/ -v -m captive_portal
 - DUT connected to test AP: `ut.ap_status()["stations"]` contains DUT MAC
 - DUT reachable via relay: `ut.http_get("http://<DUT_IP>/api/status")` → 200
 
+**Tools:** Universal ESP32 Tester
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Get DUT IP from AP status: `ut.ap_status()["stations"][0]["ip"]` | IP address returned |
@@ -396,6 +401,8 @@ pytest test/wifi/ -v -m captive_portal
 - DUT WiFi connected: relay `/api/status` → `wifi_connected` is `true` (mDNS starts after WiFi connect)
 - avahi-utils installed on Pi: `avahi-resolve-host-name --version` exits 0
 
+**Tools:** Universal ESP32 Tester
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Resolve mDNS from Pi: `avahi-resolve-host-name -4 modbus-proxy.local` | Returns DUT IP (192.168.4.x) |
@@ -413,6 +420,8 @@ pytest test/wifi/ -v -m captive_portal
 - DUT connected to test AP: `ut.ap_status()["stations"]` contains DUT MAC
 - DUT reachable via relay: `ut.http_get("http://<DUT_IP>/api/status")` → 200
 
+**Tools:** Universal ESP32 Tester
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Request dashboard: `ut.http_get("http://<DUT_IP>/")` | 200 OK |
@@ -429,6 +438,8 @@ pytest test/wifi/ -v -m captive_portal
 - ESP32 Tester AP running: `ut.ap_status()["active"] == True`
 - DUT connected to test AP: `ut.ap_status()["stations"]` contains DUT MAC
 - DUT reachable via relay: `ut.http_get("http://<DUT_IP>/api/status")` → 200
+
+**Tools:** Universal ESP32 Tester
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -450,6 +461,8 @@ pytest test/wifi/ -v -m captive_portal
 - ESP32 Tester AP stopped: `ut.ap_status()["active"] == False`
 - Generate random SSID and WPA2 password (8+ chars) for this test run
 
+**Tools:** Universal ESP32 Tester
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Start WPA2 test AP: `ut.ap_start(SSID, PASS)` | AP active with WPA2 |
@@ -470,6 +483,8 @@ pytest test/wifi/ -v -m captive_portal
 - DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
 - ESP32 Tester AP stopped: `ut.ap_status()["active"] == False`
 - Generate random SSID (no password) for this test run
+
+**Tools:** Universal ESP32 Tester
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -495,6 +510,8 @@ These tests verify the DUT handles WiFi AP outages gracefully — reconnecting a
 - DUT reachable via relay: `ut.http_get("http://<DUT_IP>/api/status")` → 200
 - Baseline uptime: record `/api/status` → `uptime` as `U_before` (via relay)
 
+**Tools:** Universal ESP32 Tester
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Stop AP: `ut.ap_stop()` | AP stopped |
@@ -518,6 +535,8 @@ These tests verify the DUT handles WiFi AP outages gracefully — reconnecting a
 - Serial slot idle: `ut.get_slot(SLOT)["state"] == "idle"`
 - Baseline uptime: record relay `/api/status` → `uptime` as `U_before`
 
+**Tools:** Universal ESP32 Tester
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Reset DUT: `ut.serial_reset(SLOT)` | DUT reboots |
@@ -538,6 +557,8 @@ These tests verify the DUT handles WiFi AP outages gracefully — reconnecting a
 - DUT reachable via relay: `ut.http_get("http://<DUT_IP>/api/status")` → 200
 - Baseline uptime: record `/api/status` → `uptime` as `U_before` (via relay)
 
+**Tools:** Universal ESP32 Tester
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Stop AP: `ut.ap_stop()` | AP stopped |
@@ -557,6 +578,8 @@ These tests verify the DUT handles WiFi AP outages gracefully — reconnecting a
 - DUT connected to test AP: `ut.ap_status()["stations"]` contains DUT MAC
 - DUT reachable via relay: `ut.http_get("http://<DUT_IP>/api/status")` → 200
 - Serial slot idle: `ut.get_slot(SLOT)["state"] == "idle"`
+
+**Tools:** Universal ESP32 Tester
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -579,6 +602,8 @@ These tests verify the DUT handles WiFi AP outages gracefully — reconnecting a
 - DUT connected to test AP: `ut.ap_status()["stations"]` contains DUT MAC
 - DUT reachable via relay: `ut.http_get("http://<DUT_IP>/api/status")` → 200
 - Serial slot idle: `ut.get_slot(SLOT)["state"] == "idle"`
+
+**Tools:** Universal ESP32 Tester
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -605,6 +630,8 @@ These tests verify the DUT handles WiFi AP outages gracefully — reconnecting a
 - Serial slot idle: `ut.get_slot(SLOT)["state"] == "idle"`
 - Baseline heap: record relay `/api/status` → `free_heap` as `H_before`
 
+**Tools:** Universal ESP32 Tester
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Repeat 5 times: `ut.serial_reset(SLOT)`, `ut.wait_for_station(timeout=30)`, verify relay `/api/status` → `mqtt_connected` is `true` | DUT reconnects WiFi + MQTT each cycle |
@@ -627,6 +654,8 @@ These tests verify the DUT handles wrong or missing WiFi credentials gracefully 
 - ESP32 Tester AP running with known credentials: `ut.ap_status()["active"] == True`
 - DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
 
+**Tools:** Universal ESP32 Tester
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Trigger captive portal and provision DUT with correct SSID but wrong password | 200 OK — credentials accepted by portal |
@@ -645,6 +674,8 @@ These tests verify the DUT handles wrong or missing WiFi credentials gracefully 
 - Serial slot idle: `ut.get_slot(SLOT)["state"] == "idle"`
 - ESP32 Tester AP running: `ut.ap_status()["active"] == True`
 - DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
+
+**Tools:** Universal ESP32 Tester
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -665,6 +696,8 @@ These tests verify the DUT handles wrong or missing WiFi credentials gracefully 
 - ESP32 Tester AP running with WPA2 (password set): `ut.ap_status()["active"] == True`
 - DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
 
+**Tools:** Universal ESP32 Tester
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Trigger captive portal and provision DUT with correct SSID but empty password | 200 OK — credentials accepted by portal |
@@ -683,6 +716,8 @@ These tests verify the DUT handles wrong or missing WiFi credentials gracefully 
 - Serial slot idle: `ut.get_slot(SLOT)["state"] == "idle"`
 - ESP32 Tester AP running: `ut.ap_status()["active"] == True`
 - DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
+
+**Tools:** Universal ESP32 Tester
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -708,6 +743,8 @@ These tests verify the captive portal UI, WiFi scanning, provisioning flow, DNS 
 - DUT in captive portal mode: trigger via `ut.gpio_set(17, 0)` + `ut.serial_reset(SLOT)`, verify serial contains `CAPTIVE PORTAL MODE TRIGGERED`, then `ut.gpio_set(17, "z")`
 - ESP32 Tester joined portal AP: `ut.sta_join("MODBUS-Proxy-Setup", "modbus-setup")` succeeds
 
+**Tools:** Universal ESP32 Tester
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Request portal page: `ut.http_get("http://192.168.4.1/")` | 200 OK |
@@ -724,6 +761,8 @@ These tests verify the captive portal UI, WiFi scanning, provisioning flow, DNS 
 - Serial slot idle: `ut.get_slot(SLOT)["state"] == "idle"`
 - DUT in captive portal mode: trigger via GPIO, verify serial output
 - ESP32 Tester joined portal AP: `ut.sta_join("MODBUS-Proxy-Setup", "modbus-setup")` succeeds
+
+**Tools:** Universal ESP32 Tester
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -743,6 +782,8 @@ These tests verify the captive portal UI, WiFi scanning, provisioning flow, DNS 
 - DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
 - ESP32 Tester AP stopped: `ut.ap_status()["active"] == False`
 - Generate random SSID and password for this test run
+
+**Tools:** Universal ESP32 Tester
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -766,6 +807,8 @@ These tests verify the captive portal UI, WiFi scanning, provisioning flow, DNS 
 - DUT in captive portal mode: trigger via GPIO, verify serial output
 - ESP32 Tester joined portal AP: `ut.sta_join("MODBUS-Proxy-Setup", "modbus-setup")` succeeds
 
+**Tools:** Universal ESP32 Tester
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Request Android captive portal URL: `ut.http_get("http://192.168.4.1/generate_204")` | Redirect (302) or portal page (200) |
@@ -782,6 +825,8 @@ These tests verify the captive portal UI, WiFi scanning, provisioning flow, DNS 
 - Serial slot idle: `ut.get_slot(SLOT)["state"] == "idle"`
 - DUT in captive portal mode: trigger via GPIO, verify serial output
 - Record start time
+
+**Tools:** Universal ESP32 Tester
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -800,6 +845,8 @@ These tests verify the captive portal UI, WiFi scanning, provisioning flow, DNS 
 - Serial slot idle: `ut.get_slot(SLOT)["state"] == "idle"`
 - GPIO 17 in input with pull-up state: `ut.gpio_set(17, "z")`
 
+**Tools:** Universal ESP32 Tester
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Reset DUT: `ut.serial_reset(SLOT)` | DUT reboots |
@@ -816,6 +863,8 @@ These tests verify the captive portal UI, WiFi scanning, provisioning flow, DNS 
 - DUT in captive portal mode (triggered via GPIO): `ut.gpio_set(17, 0)` + `ut.serial_reset(SLOT)` + `ut.gpio_set(17, "z")`
 - Portal AP visible: `ut.scan()` shows `MODBUS-Proxy-Setup` SSID
 - Portal AP joinable: `ut.sta_join("MODBUS-Proxy-Setup", "modbus-setup")` succeeds
+
+**Tools:** Universal ESP32 Tester
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -834,6 +883,8 @@ These tests verify the captive portal UI, WiFi scanning, provisioning flow, DNS 
 **Precondition:**
 - DUT in captive portal mode (triggered via GPIO): `ut.gpio_set(17, 0)` + `ut.serial_reset(SLOT)` + `ut.gpio_set(17, "z")`
 - Portal AP visible: `ut.scan()` shows `MODBUS-Proxy-Setup` SSID
+
+**Tools:** Universal ESP32 Tester
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -858,6 +909,8 @@ These tests verify that WiFi credentials are stored in NVS, take priority over c
 - DUT MQTT connected: relay `/api/status` → `mqtt_connected` is `true`
 - Serial slot idle: `ut.get_slot(SLOT)["state"] == "idle"`
 
+**Tools:** Universal ESP32 Tester
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Record current SSID via relay: `/api/status` → `wifi_ssid` | Test AP SSID |
@@ -878,6 +931,8 @@ These tests verify that WiFi credentials are stored in NVS, take priority over c
 - DUT reachable via relay: `ut.http_get("http://<DUT_IP>/api/status")` → 200
 - DUT MQTT connected: relay `/api/status` → `mqtt_connected` is `true`
 - Baseline: record relay `/api/status` → `wifi_ssid` as `SSID_before`
+
+**Tools:** Universal ESP32 Tester
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -901,6 +956,8 @@ These tests verify that WiFi credentials are stored in NVS, take priority over c
 - Serial slot idle: `ut.get_slot(SLOT)["state"] == "idle"`
 - Generate a second random SSID and password
 
+**Tools:** Universal ESP32 Tester
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | POST new credentials via relay: `ut.http_post("http://<DUT_IP>/api/wifi", json_data={"ssid": SSID2, "password": PASS2})` | 200 OK |
@@ -920,6 +977,8 @@ These tests verify that WiFi credentials are stored in NVS, take priority over c
 - DUT connected to test AP: `ut.ap_status()["stations"]` contains DUT MAC
 - DUT reachable via relay: `ut.http_get("http://<DUT_IP>/api/status")` → 200
 - Serial slot idle: `ut.get_slot(SLOT)["state"] == "idle"`
+
+**Tools:** Universal ESP32 Tester
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -941,6 +1000,8 @@ These tests verify that WiFi credentials are stored in NVS, take priority over c
 - DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
 - Generate 32-character random SSID and password
 
+**Tools:** Universal ESP32 Tester
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Start AP with 32-char SSID: `ut.ap_start(SSID_32, PASS)` | AP active |
@@ -959,6 +1020,8 @@ These tests verify that WiFi credentials are stored in NVS, take priority over c
 - Serial slot idle: `ut.get_slot(SLOT)["state"] == "idle"`
 - DUT NVS erased: erase NVS via esptool, reset DUT, confirm boot via serial
 - Generate random SSID and password containing `!@#$%^&*()` characters
+
+**Tools:** Universal ESP32 Tester
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -979,6 +1042,8 @@ These tests verify that WiFi credentials are stored in NVS, take priority over c
 - TC-000 passed (firmware flashed, NVS erased)
 - Serial slot idle: `ut.get_slot(SLOT)["state"] == "idle"`
 
+**Tools:** Home network
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Power on ESP32-C3 | Boot sequence starts |
@@ -996,6 +1061,8 @@ These tests verify that WiFi credentials are stored in NVS, take priority over c
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
 - MQTT connected: `/api/status` → `mqtt_connected: true`
+
+**Tools:** Home network
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -1015,6 +1082,8 @@ These tests verify that WiFi credentials are stored in NVS, take priority over c
 - DUT reachable: `GET /api/status` → 200 OK
 - MQTT connected: `/api/status` → `mqtt_connected: true`
 
+**Tools:** Home network
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Publish `{"power": 5000.0}` to `wallbox` | Message received |
@@ -1030,6 +1099,8 @@ These tests verify that WiFi credentials are stored in NVS, take priority over c
 - DUT reachable: `GET /api/status` → 200 OK
 - MQTT connected: `/api/status` → `mqtt_connected: true`
 
+**Tools:** Home network
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Publish `{"chargePower": 7400}` to `wallbox` | Message received |
@@ -1044,6 +1115,8 @@ These tests verify that WiFi credentials are stored in NVS, take priority over c
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
 - MQTT connected: `/api/status` → `mqtt_connected: true`
+
+**Tools:** Home network
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -1062,6 +1135,8 @@ These tests verify that WiFi credentials are stored in NVS, take priority over c
 - MQTT connected: `/api/status` → `mqtt_connected: true`
 - Current wallbox topic known: `get_config` → `wallbox_topic`
 
+**Tools:** Home network
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Publish `{"cmd": "set_wallbox_topic", "topic": "ocpp/wallbox/power"}` | Command received |
@@ -1078,6 +1153,8 @@ These tests verify that WiFi credentials are stored in NVS, take priority over c
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
 - MQTT connected: `/api/status` → `mqtt_connected: true`
+
+**Tools:** Home network
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -1097,6 +1174,8 @@ These tests verify that WiFi credentials are stored in NVS, take priority over c
 - MQTT connected: `/api/status` → `mqtt_connected: true`
 - Current MQTT config known: `get_config` → `mqtt_host`, `mqtt_port`
 
+**Tools:** Home network
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Publish `{"cmd": "set_mqtt", "host": "192.168.0.100", "port": 1883}` | Command received |
@@ -1113,6 +1192,8 @@ These tests verify that WiFi credentials are stored in NVS, take priority over c
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
 - MQTT connected: `/api/status` → `mqtt_connected: true`
+
+**Tools:** Home network
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -1133,6 +1214,8 @@ These tests verify that WiFi credentials are stored in NVS, take priority over c
 - MQTT connected: `/api/status` → `mqtt_connected: true`
 - No active wallbox data: `/api/status` → `correction_active: false`
 
+**Tools:** Home network
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Publish wallbox power: 500W | Below threshold (1000W) |
@@ -1149,6 +1232,8 @@ These tests verify that WiFi credentials are stored in NVS, take priority over c
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
 - MQTT connected: `/api/status` → `mqtt_connected: true`
+
+**Tools:** Home network
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -1172,6 +1257,8 @@ These tests verify that all DUT network services (REST API, OTA, RSSI reporting)
 - DUT connected to test AP: `ut.ap_status()["stations"]` contains DUT MAC
 - DUT reachable via relay: `ut.http_get("http://<DUT_IP>/api/status")` → 200
 
+**Tools:** Universal ESP32 Tester
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | GET `/api/status` via relay | 200 OK, valid JSON |
@@ -1191,6 +1278,8 @@ These tests verify that all DUT network services (REST API, OTA, RSSI reporting)
 - DUT connected to test AP: `ut.ap_status()["stations"]` contains DUT MAC
 - DUT reachable via relay: `ut.http_get("http://<DUT_IP>/api/status")` → 200
 
+**Tools:** Universal ESP32 Tester
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | GET `/ota/health` via relay: `ut.http_get("http://<DUT_IP>/ota/health")` | 200 OK |
@@ -1207,6 +1296,8 @@ These tests verify that all DUT network services (REST API, OTA, RSSI reporting)
 - DUT connected to test AP: `ut.ap_status()["stations"]` contains DUT MAC
 - DUT reachable via relay: `ut.http_get("http://<DUT_IP>/api/status")` → 200
 
+**Tools:** Universal ESP32 Tester
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | GET `/api/status` via relay | 200 OK |
@@ -1222,6 +1313,8 @@ These tests verify that all DUT network services (REST API, OTA, RSSI reporting)
 - ESP32 Tester AP running: `ut.ap_status()["active"] == True` — record SSID
 - DUT connected to test AP: `ut.ap_status()["stations"]` contains DUT MAC
 - DUT reachable via relay: `ut.http_get("http://<DUT_IP>/api/status")` → 200
+
+**Tools:** Universal ESP32 Tester
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -1243,6 +1336,8 @@ These tests verify that all DUT network services (REST API, OTA, RSSI reporting)
 - MQTT broker accessible via SSH: `ssh pi@192.168.0.87 "systemctl is-active mosquitto"` → `active`
 - Baseline uptime: record `/api/status` → `uptime` as `U_before`
 - Subscribe to `MBUS-PROXY/log` for buffered log capture
+
+**Tools:** Home network
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -1266,6 +1361,8 @@ These tests verify that all DUT network services (REST API, OTA, RSSI reporting)
 - MQTT connected: relay `/api/status` → `mqtt_connected: true`
 - Baseline uptime: record relay `/api/status` → `uptime` as `U_before`
 
+**Tools:** Universal ESP32 Tester
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Stop WiFi AP: `ut.ap_stop()` | AP stopped, DUT loses WiFi |
@@ -1286,6 +1383,8 @@ These tests verify that all DUT network services (REST API, OTA, RSSI reporting)
 - MQTT connected: `/api/status` → `mqtt_connected: true`
 - Baseline error count: record `/api/status` → `wallbox_errors`
 
+**Tools:** Home network
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Publish `not_a_number` to wallbox topic | Invalid format |
@@ -1303,6 +1402,8 @@ These tests verify that all DUT network services (REST API, OTA, RSSI reporting)
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
 - MQTT connected: `/api/status` → `mqtt_connected: true`
+
+**Tools:** Home network
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -1324,6 +1425,8 @@ These tests verify that all DUT network services (REST API, OTA, RSSI reporting)
 - MQTT connected: `/api/status` → `mqtt_connected: true`
 - Baseline error count: record `/api/status` → `wallbox_errors`
 
+**Tools:** Home network
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Publish 300-byte wallbox message | Above 256 limit |
@@ -1343,6 +1446,8 @@ These tests verify that all DUT network services (REST API, OTA, RSSI reporting)
 - MQTT connected: `/api/status` → `mqtt_connected: true`
 - Baseline heap: record `/api/status` → `free_heap`
 
+**Tools:** Home network
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Publish 20 power values in 2 seconds | High message rate |
@@ -1360,6 +1465,8 @@ These tests verify that all DUT network services (REST API, OTA, RSSI reporting)
 - DUT reachable: `GET /api/status` → 200 OK
 - MQTT connected: `/api/status` → `mqtt_connected: true`
 - Serial slot idle: `ut.get_slot(SLOT)["state"] == "idle"` (for DTR reset)
+
+**Tools:** Home network, Universal ESP32 Tester
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -1380,6 +1487,8 @@ These tests verify that all DUT network services (REST API, OTA, RSSI reporting)
 - Firmware binary exists: `.pio/build/esp32-c3-release/firmware.bin`
 - OTA endpoint alive: `GET /ota/health` → 200 OK (if available)
 
+**Tools:** PlatformIO, Home network
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Build new firmware | Different version |
@@ -1397,6 +1506,8 @@ These tests verify that all DUT network services (REST API, OTA, RSSI reporting)
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
 - MQTT connected: `/api/status` → `mqtt_connected: true`
+
+**Tools:** Home network
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -1417,6 +1528,8 @@ These tests verify that all DUT network services (REST API, OTA, RSSI reporting)
 - MQTT connected: `/api/status` → `mqtt_connected: true`
 - Baseline reconnects: record `/api/status` → `mqtt_reconnects`
 
+**Tools:** Home network
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Change MQTT host to invalid IP | set_mqtt command |
@@ -1435,6 +1548,8 @@ These tests verify that all DUT network services (REST API, OTA, RSSI reporting)
 - DUT reachable: `GET /api/status` → 200 OK
 - MQTT connected: `/api/status` → `mqtt_connected: true`
 - MQTT broker accessible via SSH: `ssh broker-host "systemctl is-active mosquitto"` → `active`
+
+**Tools:** Home network
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -1455,6 +1570,8 @@ These tests verify that all DUT network services (REST API, OTA, RSSI reporting)
 - MQTT connected: `/api/status` → `mqtt_connected: true`
 - Baseline error count: record `/api/status` → `wallbox_errors`
 
+**Tools:** Home network
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Publish empty message to wallbox | Zero-length payload |
@@ -1471,6 +1588,8 @@ These tests verify that all DUT network services (REST API, OTA, RSSI reporting)
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
 - MQTT connected: `/api/status` → `mqtt_connected: true`
+
+**Tools:** Home network
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -1490,6 +1609,8 @@ These fault conditions cannot be triggered via external interfaces on production
 
 **Verification method:** Code review of `src/modbus_proxy.cpp` watchdog task.
 
+**Tools:** Code review
+
 | Check | Code Location | Expected |
 |-------|---------------|----------|
 | Heartbeat tracking per task | `watchdogTask()` loop | Each task's `lastHeartbeat` checked every 5s |
@@ -1503,6 +1624,8 @@ These fault conditions cannot be triggered via external interfaces on production
 
 **Verification method:** Code review of hardware WDT initialization in `setup()`.
 
+**Tools:** Code review
+
 | Check | Code Location | Expected |
 |-------|---------------|----------|
 | Hardware WDT initialized | `setup()` | `esp_task_wdt_init()` with 90s timeout |
@@ -1514,6 +1637,8 @@ These fault conditions cannot be triggered via external interfaces on production
 ### EC-115: Critical Memory Watchdog (Code Review)
 
 **Verification method:** Code review of heap monitoring in watchdog task.
+
+**Tools:** Code review
 
 | Check | Code Location | Expected |
 |-------|---------------|----------|
@@ -1531,6 +1656,8 @@ These fault conditions cannot be triggered via external interfaces on production
 - MQTT connected: `/api/status` → `mqtt_connected: true`
 - Baseline uptime: record `/api/status` → `uptime`
 - MQTT broker accessible via SSH: `ssh broker-host "systemctl is-active mosquitto"` → `active`
+
+**Tools:** Home network
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -1567,6 +1694,8 @@ These fault conditions cannot be triggered via external interfaces on production
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
 
+**Tools:** Home network
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Open http://{device-ip}/ in browser | Dashboard page loads |
@@ -1586,6 +1715,8 @@ These fault conditions cannot be triggered via external interfaces on production
 - DUT reachable: `GET /api/status` → 200 OK
 - MQTT connected: `/api/status` → `mqtt_connected: true`
 
+**Tools:** Home network
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | GET / (dashboard HTML) | Contains JavaScript with color threshold logic |
@@ -1602,6 +1733,8 @@ These fault conditions cannot be triggered via external interfaces on production
 
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
+
+**Tools:** Home network
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -1622,6 +1755,8 @@ These fault conditions cannot be triggered via external interfaces on production
 - DUT reachable: `GET /api/status` → 200 OK
 - Debug mode off: `/api/status` → `debug_mode: false`
 
+**Tools:** Home network
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Navigate to /setup | Setup page loads |
@@ -1640,6 +1775,8 @@ These fault conditions cannot be triggered via external interfaces on production
 - DUT reachable: `GET /api/status` → 200 OK
 - MQTT connected: `/api/status` → `mqtt_connected: true`
 - Current MQTT config known: `GET /api/config` → `mqtt_host`, `mqtt_port`
+
+**Tools:** Home network
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -1660,6 +1797,8 @@ These fault conditions cannot be triggered via external interfaces on production
 - DUT reachable: `GET /api/status` → 200 OK
 - MQTT connected: `/api/status` → `mqtt_connected: true`
 
+**Tools:** Home network
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Navigate to /setup | Current wallbox topic shown |
@@ -1676,6 +1815,8 @@ These fault conditions cannot be triggered via external interfaces on production
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
 - Non-default config set (e.g., custom MQTT host or wallbox topic)
+
+**Tools:** Home network
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -1694,6 +1835,8 @@ These fault conditions cannot be triggered via external interfaces on production
 **Precondition:**
 - DUT reachable: `GET /api/status` → 200 OK
 
+**Tools:** Home network
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | GET /api/status | 200 OK, JSON response |
@@ -1710,6 +1853,8 @@ These fault conditions cannot be triggered via external interfaces on production
 - DUT reachable: `GET /api/status` → 200 OK
 - Baseline uptime: record `/api/status` → `uptime`
 
+**Tools:** Home network
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | POST /api/restart | {"status":"ok"} |
@@ -1725,6 +1870,8 @@ These fault conditions cannot be triggered via external interfaces on production
 **Precondition:**
 - DUT reachable via relay: `ut.http_get("http://<DUT_IP>/api/status")` → 200
 - mDNS resolver available: `avahi-resolve` on Serial Portal Pi or test host
+
+**Tools:** Home network
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -1748,6 +1895,8 @@ Consolidates heap monitoring, MQTT traffic, mixed usage, and watchdog stability 
 - Baseline heap: record `/api/status` → `free_heap`
 - Baseline uptime: record `/api/status` → `uptime`
 - Baseline counters: record `/api/status` → `mqtt_reconnects`, `wallbox_updates`, `wallbox_errors`
+
+**Tools:** Home network
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
@@ -1784,6 +1933,8 @@ Tests MQTT broker and WiFi AP disconnect/reconnect resilience with the same numb
 - Baseline heap: record `/api/status` → `free_heap`
 - Baseline uptime: record `/api/status` → `uptime`
 
+**Tools:** Universal ESP32 Tester, Home network
+
 | Step | Action | Expected Result |
 |------|--------|-----------------|
 | 1 | Subscribe to `MBUS-PROXY/log` | Subscription active |
@@ -1817,6 +1968,8 @@ Verifies the DUT remains stable with zero external traffic for 24 hours — catc
 - Baseline heap: record `/api/status` → `free_heap`
 - Baseline uptime: record `/api/status` → `uptime`
 - No wallbox traffic: no messages on `wallbox` topic
+
+**Tools:** Home network
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
