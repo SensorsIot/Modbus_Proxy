@@ -104,8 +104,8 @@ Defined in §3–§13, organized by execution order. Phase 1 covers functional b
 | Component | Description |
 |-----------|-------------|
 | ESP32-C3 Supermini | Device Under Test (DUT) |
-| Serial Portal Pi | RFC2217 serial server + GPIO control at 192.168.0.87 ([Serial Portal](https://github.com/SensorsIot/Serial-via-Ethernet)) |
-| ESP32 Tester | Pi wlan0 with hostapd/dnsmasq, HTTP-controlled AP at 192.168.0.87:8080 |
+| Serial Portal Pi | RFC2217 serial server + GPIO control at 192.168.0.168 ([Serial Portal](https://github.com/SensorsIot/Serial-via-Ethernet)) |
+| ESP32 Tester | Pi wlan0 with hostapd/dnsmasq, HTTP-controlled AP at 192.168.0.168:8080 |
 | GPIO wiring | Pi GPIO 18 → DUT GPIO 2 (portal button, active LOW with INPUT_PULLUP). Pi GPIO 18 is also the slot's download-mode strap, so it must not be driven while flashing. |
 | MQTT Broker | Mosquitto on Pi, accessible at 192.168.4.1:1883 via test AP network |
 
@@ -277,11 +277,11 @@ These run first, in order, to establish and verify the clean DUT state before an
 
 **Pass Criteria**: All flash/erase operations succeed, DUT resets into normal boot (not download mode), serial output confirms application is running.
 
-**Automation:** esptool via `rfc2217://192.168.0.87:4001`. Flash bootloader.bin, partitions.bin, firmware.bin at correct offsets. Erase NVS. Verify boot via serial.
+**Automation:** esptool via `rfc2217://192.168.0.168:4001`. Flash bootloader.bin, partitions.bin, firmware.bin at correct offsets. Erase NVS. Verify boot via serial.
 
 ```bash
 ESPTOOL="python3 ~/.platformio/packages/tool-esptoolpy/esptool.py"
-PORT="rfc2217://192.168.0.87:4001"
+PORT="rfc2217://192.168.0.168:4001"
 BUILD=".pio/build/esp32-c3-debug"
 
 # Build
@@ -359,7 +359,7 @@ pip install -r test/wifi/requirements.txt
 pip install -e <path-to-Universal-ESP32-Tester>/pytest  # ESP32 Tester driver
 
 # All WiFi tests
-ESP32_TESTER_URL=http://192.168.0.87:8080 pytest test/wifi/ -v
+ESP32_TESTER_URL=http://192.168.0.168:8080 pytest test/wifi/ -v
 
 # Skip slow captive portal tests
 pytest test/wifi/ -v -m "not captive_portal"
@@ -970,7 +970,7 @@ These tests verify that WiFi credentials are stored in NVS, take priority over c
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | Restart MQTT broker on Pi: `ssh pi@192.168.0.87 sudo systemctl restart mosquitto` | Broker restarts |
+| 1 | Restart MQTT broker on Pi: `ssh pi@192.168.0.168 sudo systemctl restart mosquitto` | Broker restarts |
 | 2 | Wait 10s for DUT to detect disconnect and reconnect | MQTT reconnect cycle |
 | 3 | Verify WiFi stable via relay: `/api/status` → `wifi_connected` | `true` (WiFi never dropped) |
 | 4 | Verify MQTT reconnected via relay: `/api/status` → `mqtt_connected` | `true` |
@@ -1367,7 +1367,7 @@ These tests verify that all DUT network services (REST API, OTA, RSSI reporting)
 - DUT reachable: `GET /api/status` → 200 OK
 - MQTT connected: `/api/status` → `mqtt_connected: true`
 - Wallbox power active: publish `3500` to `wallbox`, verify `/api/status` → `wallbox_power` ≈ 3500
-- MQTT broker accessible via SSH: `ssh pi@192.168.0.87 "systemctl is-active mosquitto"` → `active`
+- MQTT broker accessible via SSH: `ssh pi@192.168.0.168 "systemctl is-active mosquitto"` → `active`
 - Baseline uptime: record `/api/status` → `uptime` as `U_before`
 - Subscribe to `MBUS-PROXY/log` for buffered log capture
 
@@ -1375,9 +1375,9 @@ These tests verify that all DUT network services (REST API, OTA, RSSI reporting)
 
 | Step | Action | Expected Result |
 |------|--------|-----------------|
-| 1 | Stop MQTT broker: `ssh pi@192.168.0.87 sudo systemctl stop mosquitto` | Broker stops |
+| 1 | Stop MQTT broker: `ssh pi@192.168.0.168 sudo systemctl stop mosquitto` | Broker stops |
 | 2 | Wait 10s | DUT detects disconnect |
-| 3 | Restart MQTT broker: `ssh pi@192.168.0.87 sudo systemctl start mosquitto` | Broker available |
+| 3 | Restart MQTT broker: `ssh pi@192.168.0.168 sudo systemctl start mosquitto` | Broker available |
 | 4 | Wait for MQTT reconnect: poll `/api/status` → `mqtt_connected` | `true` within 30s |
 | 5 | Check uptime via `/api/status` → `uptime` | `uptime` > `U_before` (no reboot) |
 | 6 | Check `MBUS-PROXY/log` subscription | Buffered log messages arrive after reconnect |
@@ -1512,7 +1512,7 @@ These tests verify that all DUT network services (REST API, OTA, RSSI reporting)
 
 **Pass Criteria**: Configuration survives power cycle.
 
-**Automation:** pytest, pyserial (RFC2217). Set custom config via MQTT, toggle DTR on rfc2217://192.168.0.87:4003 to reset, verify NVS preserved via get_config.
+**Automation:** pytest, pyserial (RFC2217). Set custom config via MQTT, toggle DTR on rfc2217://192.168.0.168:4003 to reset, verify NVS preserved via get_config.
 
 ### EC-107: OTA Update
 
@@ -1963,7 +1963,7 @@ Tests MQTT broker and WiFi AP disconnect/reconnect resilience with the same numb
 - MQTT connected: `/api/status` → `mqtt_connected: true`
 - ESP32 Tester AP running: `ut.ap_status()["active"] == True`
 - DUT connected to test AP: `ut.ap_status()["stations"]` contains DUT MAC
-- MQTT broker accessible via SSH: `ssh pi@192.168.0.87 "systemctl is-active mosquitto"` → `active`
+- MQTT broker accessible via SSH: `ssh pi@192.168.0.168 "systemctl is-active mosquitto"` → `active`
 - Baseline heap: record `/api/status` → `free_heap`
 - Baseline uptime: record `/api/status` → `uptime`
 
@@ -1990,7 +1990,7 @@ Tests MQTT broker and WiFi AP disconnect/reconnect resilience with the same numb
 
 **Duration:** 8h
 
-**Automation:** pytest, paho-mqtt, requests, ESP32 Tester (ap_stop/ap_start), subprocess (SSH). Main loop: publish wallbox at 1 msg/s. Broker cycle thread: `ssh pi@192.168.0.87 sudo systemctl stop mosquitto`, sleep 30s, restart, poll `/api/status` for `mqtt_connected`. WiFi cycle thread: `ut.ap_stop()`, sleep 60s, `ut.ap_start()`, poll via relay. Post-run analysis asserts all numeric criteria.
+**Automation:** pytest, paho-mqtt, requests, ESP32 Tester (ap_stop/ap_start), subprocess (SSH). Main loop: publish wallbox at 1 msg/s. Broker cycle thread: `ssh pi@192.168.0.168 sudo systemctl stop mosquitto`, sleep 30s, restart, poll `/api/status` for `mqtt_connected`. WiFi cycle thread: `ut.ap_stop()`, sleep 60s, `ut.ap_start()`, poll via relay. Post-run analysis asserts all numeric criteria.
 
 ### LD-003: Idle Stability (24h)
 
@@ -2064,7 +2064,7 @@ pio run -e esp32-c3-production   # No serial (level 0)
 pio test -e unit-test            # Run unit tests on host
 
 # Flash via serial (esptool, any build)
-python3 esptool.py --chip esp32c3 --port "rfc2217://192.168.0.87:4001" --baud 921600 \
+python3 esptool.py --chip esp32c3 --port "rfc2217://192.168.0.168:4001" --baud 921600 \
     write_flash 0x0 .pio/build/esp32-c3-debug/bootloader.bin \
     0x8000 .pio/build/esp32-c3-debug/partitions.bin \
     0x10000 .pio/build/esp32-c3-debug/firmware.bin

@@ -442,11 +442,11 @@ Remote serial flashing via the [Serial Portal](https://github.com/SensorsIot/Ser
 
 ```bash
 # Check which port the C3 is on
-curl -s http://192.168.0.87:8080/api/devices
+curl -s http://192.168.0.168:8080/api/devices
 
 # Flash (replace port with actual slot port)
 python3 -m esptool --chip esp32c3 \
-  --port "rfc2217://192.168.0.87:4002" --baud 921600 \
+  --port "rfc2217://192.168.0.168:4002" --baud 921600 \
   write-flash -z 0x0 .pio/build/esp32-c3-release/firmware.bin
 ```
 
@@ -878,13 +878,13 @@ The MQTT log level (runtime, Section 6.3) and serial debug level (compile-time) 
 
 ### 17.4 Test Infrastructure
 
-All tests run on an isolated artificial network hosted by the Serial Portal Pi (192.168.0.87). No dependency on the home network (`private-2G`) or production MQTT broker (192.168.0.203) is required for testing.
+All tests run on an isolated artificial network hosted by the Serial Portal Pi (192.168.0.168). No dependency on the home network (`private-2G`) or production MQTT broker (192.168.0.203) is required for testing.
 
 **Network Architecture:**
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│  Serial Portal Pi (192.168.0.87)                                │
+│  Serial Portal Pi (192.168.0.168)                                │
 │                                                                 │
 │  ┌──────────────────┐  ┌──────────────────┐  ┌───────────────┐ │
 │  │ ESP32 Tester AP   │  │ Serial Portal    │  │ mosquitto     │ │
@@ -905,7 +905,7 @@ All tests run on an isolated artificial network hosted by the Serial Portal Pi (
 
 | Property | Value |
 |----------|-------|
-| Host | Serial Portal Pi (192.168.0.87) |
+| Host | Serial Portal Pi (192.168.0.168) |
 | Version | mosquitto 2.0.21 |
 | Config file | `/etc/mosquitto/conf.d/test-broker.conf` |
 | Listen address | `0.0.0.0:1883` (all interfaces) |
@@ -913,9 +913,9 @@ All tests run on an isolated artificial network hosted by the Serial Portal Pi (
 | Authentication | Username `admin`, password `admin` (password file: `/etc/mosquitto/passwd`) |
 | Anonymous access | Allowed |
 | Auto-start | `systemctl enable mosquitto` (starts on boot) |
-| Manual restart | `ssh pi@192.168.0.87 sudo systemctl restart mosquitto` |
+| Manual restart | `ssh pi@192.168.0.168 sudo systemctl restart mosquitto` |
 
-The broker is accessible at `192.168.4.1:1883` from the test network (ESP32 Tester AP subnet) and at `192.168.0.87:1883` from the home LAN. During testing the DUT connects via `192.168.4.1`, the same address as the ESP32 Tester AP gateway.
+The broker is accessible at `192.168.4.1:1883` from the test network (ESP32 Tester AP subnet) and at `192.168.0.168:1883` from the home LAN. During testing the DUT connects via `192.168.4.1`, the same address as the ESP32 Tester AP gateway.
 
 **Test workflow** (see test spec for full details):
 1. DUT is flashed and NVS-erased via RFC2217 serial
